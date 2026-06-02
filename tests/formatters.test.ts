@@ -276,4 +276,5 @@ describe("formatAgentRunFinished", () => {
     const msg = formatAgentRunFinished(mockEvent());
     expect(msg.options.disableNotification).toBe(true);
   });
+
 });
