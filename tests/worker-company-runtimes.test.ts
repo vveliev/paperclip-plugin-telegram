@@ -3,6 +3,8 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 import { listCompaniesForStartup, resolveCompanyRuntimes } from "../src/worker.js";
 
+type TelegramConfigLike = { enableCommands?: boolean; enableInbound?: boolean };
+
 let stateStore: Record<string, unknown> = {};
 let configByCompany: Record<string, Record<string, unknown>> = {};
 
@@ -201,5 +203,156 @@ describe("resolveCompanyRuntimes (config merge + company-runtime resolution)", (
 
     const runtimes = await resolveCompanyRuntimes(ctx, startupConfig, () => true);
     expect(runtimes).toEqual([]);
+  });
+});
+
+describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same company)", () => {
+  const companyConfig = {
+    telegramBotTokenRef: { type: "secret_ref", secretId: "s1" },
+    defaultChatId: "-1001234",
+    enableCommands: true,
+  };
+  const wantsCommands = (c: TelegramConfigLike) => Boolean(c.enableCommands);
+
+  it("builds a runtime when startupConfig IS that company's own config", async () => {
+    // The outage. setup() resolves the company first and loads config scoped to
+    // it, so startupConfig and the scoped config are identical. The
+    // "does this company differ from the instance?" guard then finds nothing
+    // different, skips the only company, and long polling never starts — while
+    // startup still logs "Telegram bot plugin started".
+    configByCompany["BLA"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(),
+      { ...companyConfig } as never,
+      wantsCommands as never,
+      [{ id: "BLA" }],
+      "BLA",
+    );
+
+    expect(runtimes).toHaveLength(1);
+    expect(runtimes[0]!.companyId).toBe("BLA");
+    expect(runtimes[0]!.token).toBe("bot-token-123");
+  });
+
+  it("still builds a runtime when the startup config load failed and left defaults", async () => {
+    // The path that accidentally kept polling alive before the fix. It must
+    // keep working, or the fix trades one silent outage for another.
+    configByCompany["BLA"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), {} as never, wantsCommands as never, [{ id: "BLA" }], "BLA",
+    );
+
+    expect(runtimes).toHaveLength(1);
+  });
+
+  it("does not spawn a duplicate runtime for a company that only inherits the instance config", async () => {
+    // Why the diff guard exists: without it every company would produce a
+    // runtime for the same bot and each inbound update would be handled twice.
+    configByCompany["BLA"] = { ...companyConfig };
+    configByCompany["OTHER"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), { ...companyConfig } as never, wantsCommands as never,
+      [{ id: "BLA" }, { id: "OTHER" }], "BLA",
+    );
+
+    expect(runtimes.map((r) => r.companyId)).toEqual(["BLA"]);
+  });
+
+  it("builds runtimes for other companies that DO define their own route", async () => {
+    configByCompany["BLA"] = { ...companyConfig };
+    configByCompany["OTHER"] = { ...companyConfig, defaultChatId: "-1009999" };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), { ...companyConfig } as never, wantsCommands as never,
+      [{ id: "BLA" }, { id: "OTHER" }], "BLA",
+    );
+
+    expect(runtimes.map((r) => r.companyId).sort()).toEqual(["BLA", "OTHER"]);
+  });
+
+  it("keeps honouring the predicate for the startup company", async () => {
+    // The exemption is about the config diff only; a company with commands and
+    // inbound both disabled must still not be polled.
+    configByCompany["BLA"] = { ...companyConfig, enableCommands: false };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), { ...companyConfig, enableCommands: false } as never,
+      wantsCommands as never, [{ id: "BLA" }], "BLA",
+    );
+
+    expect(runtimes).toHaveLength(0);
+  });
+});
+
+describe("resolveCompanyRuntimes from scheduled jobs (BLA-175 follow-up)", () => {
+  const companyConfig = {
+    telegramBotTokenRef: { type: "secret_ref", secretId: "s1" },
+    defaultChatId: "-1001234",
+    enableInbound: true,
+    escalationChatId: "-1005678",
+  };
+
+  it("resolves a runtime the way a job calls it — no prefetched companies", async () => {
+    // check-escalation-timeouts and check-watches call this with no company
+    // list, relying on the board-access fallback. They pass the same
+    // company-scoped `config` setup() loaded, so without the startup company id
+    // they hit the identical diff-guard skip: zero runtimes, the for-loop
+    // iterates nothing, and the job logs "completed successfully" having done
+    // nothing at all. Observed live via the skip-reason warning.
+    stateStore["telegram.board-access.v1"] = { companyId: "BLA" };
+    configByCompany["BLA"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(),
+      { ...companyConfig } as never,
+      ((c: TelegramConfigLike & { escalationChatId?: string }) =>
+        Boolean(c.enableInbound || c.escalationChatId)) as never,
+      undefined,
+      "BLA",
+    );
+
+    expect(runtimes).toHaveLength(1);
+    expect(runtimes[0]!.companyId).toBe("BLA");
+  });
+
+  it("returns nothing when the startup company id is withheld, proving the argument is load-bearing", async () => {
+    stateStore["telegram.board-access.v1"] = { companyId: "BLA" };
+    configByCompany["BLA"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(),
+      { ...companyConfig } as never,
+      ((c: TelegramConfigLike & { escalationChatId?: string }) =>
+        Boolean(c.enableInbound || c.escalationChatId)) as never,
+      undefined,
+      null,
+    );
+
+    expect(runtimes).toHaveLength(0);
+  });
+});
+
+describe("every resolveCompanyRuntimes call site passes the startup company", () => {
+  it("has no call in worker.ts that omits it", async () => {
+    // A structural check rather than a behavioural one, because the failure is
+    // a CALLER forgetting an optional argument — there were three call sites
+    // and fixing only the first left two jobs silently doing nothing. A fourth
+    // call site added later would fail the same way, and no unit test of
+    // resolveCompanyRuntimes itself can see that.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
+
+    const calls = [...src.matchAll(/resolveCompanyRuntimes\(([\s\S]*?)\n\s*\);/g)]
+      .map((m) => m[1]!)
+      // the declaration itself is not a call
+      .filter((body) => !body.includes("ctx: PluginContext"));
+
+    expect(calls.length).toBeGreaterThanOrEqual(3);
+    for (const body of calls) {
+      expect(body).toContain("startupConfigCompanyId");
+    }
   });
 });

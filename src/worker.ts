@@ -384,6 +384,7 @@ export async function resolveCompanyRuntimes(
   startupConfig: TelegramConfig,
   predicate: (config: TelegramConfig) => boolean,
   prefetchedCompanies?: Array<{ id: string }>,
+  startupConfigCompanyId?: string | null,
 ): Promise<TelegramCompanyRuntime[]> {
   // `ctx.companies.list()` is the natural way to enumerate companies, but it is
   // not reliable from setup(): on hosts that enforce per-invocation scoping it
@@ -434,7 +435,19 @@ export async function resolveCompanyRuntimes(
       const startupValue = startupConfig[key as keyof TelegramConfig];
       return typeof value === "string" && value.trim() && value !== startupValue;
     });
-    if (!hasCompanyTelegramRoute) continue;
+
+    // The diff above exists so that companies merely inheriting the instance
+    // config do not each spawn a runtime for the same bot. It cannot be applied
+    // to the company `startupConfig` was itself loaded for: setup() resolves the
+    // company first and loads config scoped to it, so for that company the two
+    // are the same object and NOTHING differs — the company is skipped, no
+    // runtime is built, and long polling never starts. Every inbound feature is
+    // then dead for the worker's life while startup still logs success.
+    //
+    // The inversion is what makes it vicious: polling only survives when the
+    // startup config load FAILS and leaves defaults to differ from.
+    const isStartupConfigCompany = Boolean(startupConfigCompanyId) && company.id === startupConfigCompanyId;
+    if (!isStartupConfigCompany && !hasCompanyTelegramRoute) continue;
 
     if (!predicate(effectiveConfig)) continue;
 
@@ -659,11 +672,17 @@ const plugin = definePlugin({
       });
     });
 
+    // The company loadStartupConfig was scoped to. Every resolveCompanyRuntimes
+    // call in this closure compares against that same `config`, so they all
+    // need it — see the note on the diff guard in resolveCompanyRuntimes.
+    const startupConfigCompanyId = startupCompanies[0]?.id ?? null;
+
     const pollingRuntimes = await resolveCompanyRuntimes(
       ctx,
       config,
       (effectiveConfig) => Boolean(effectiveConfig.enableCommands || effectiveConfig.enableInbound),
       startupCompanies,
+      startupConfigCompanyId,
     );
     if (pollingRuntimes.length === 0) {
       ctx.logger.warn("No company-scoped Telegram bot token is resolvable during startup; setup will continue without polling");
@@ -1433,6 +1452,8 @@ const plugin = definePlugin({
           ctx,
           config,
           (effectiveConfig) => Boolean(effectiveConfig.enableInbound || effectiveConfig.escalationChatId),
+          undefined,
+          startupConfigCompanyId,
         );
         for (const runtime of runtimes) {
           await escalationManager.checkTimeouts(ctx, runtime.token, runtime.companyId);
@@ -1449,6 +1470,8 @@ const plugin = definePlugin({
           ctx,
           config,
           (effectiveConfig) => (effectiveConfig.maxSuggestionsPerHourPerCompany ?? 10) > 0,
+          undefined,
+          startupConfigCompanyId,
         );
         for (const runtime of runtimes) {
           await checkWatches(ctx, runtime.token, {
