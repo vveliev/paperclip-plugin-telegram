@@ -1,7 +1,7 @@
 import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { METRIC_NAMES } from "./constants.js";
-import { fetchOpenDecisions, sendDecisionList } from "./decisions.js";
+import { fetchPendingInteractions, sendPendingList } from "./decisions.js";
 import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 
@@ -120,8 +120,8 @@ async function handleDecisions(
 
   try {
     const companyId = resolvedCompanyId ?? (await resolveCompanyId(ctx, chatId));
-    const decisions = await fetchOpenDecisions(ctx, baseUrl, companyId, boardApiToken);
-    await sendDecisionList(ctx, token, chatId, decisions, {
+    const found = await fetchPendingInteractions(ctx, baseUrl, companyId, boardApiToken);
+    await sendPendingList(ctx, token, chatId, found, {
       messageThreadId,
       publicUrl: isExternalUrl(publicUrl) ? publicUrl : undefined,
     });

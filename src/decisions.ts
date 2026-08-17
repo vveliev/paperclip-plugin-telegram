@@ -3,215 +3,182 @@ import { sendMessage, escapeMarkdownV2 } from "./telegram-api.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 
 /**
- * The decision queue in Telegram — the things actually waiting on a human.
+ * What is actually waiting on a human, as the /<company>/decisions page shows it.
  *
- * Distinct from approvals: an approval is a yes/no on one request, whereas a
- * decision carries its own option set and applies effects when chosen. It is
- * what the /<company>/decisions page lists.
+ * The naming here is a trap worth documenting. There IS a `decisions` table and
+ * a /companies/:id/decisions endpoint — but that is a different, largely unused
+ * feature. The Decisions PAGE is built from **issue thread interactions**:
+ * `ask_user_questions` and `request_confirmation` records attached to issues,
+ * grouped into "decision queues" (Questions, Plans).
  *
- * Buttons here are deliberately NOT backed by the in-memory choice registry
- * used by workflow steps. A decision can sit unanswered for days and must
- * still be actionable after a plugin restart, so the callback carries
- * everything needed to act: the decision id and the option index.
+ * Querying /decisions?status=open returns [] on an instance with a full page,
+ * which reads as "nothing pending" and is worse than an error.
+ *
+ * There is no company-wide endpoint that returns pending interactions WITH
+ * their content:
+ *   - /decision-queues/:key/items returns bare pointers (sourceKind+sourceId),
+ *     with no enrichment and no issue id, and it retains resolved items too.
+ *   - Interactions are only readable per issue, via /issues/:id/interactions.
+ *
+ * So this walks recent issues and collects their pending interactions. The
+ * bound is deliberate: unbounded, this would be one request per issue for the
+ * life of the company. Pending questions are by nature recent — an agent is
+ * blocked waiting on them — so recency is the right cut, and the cap is
+ * reported to the user rather than hidden.
  */
 
 const CALLBACK_PREFIX = "dec_";
+const DEFAULT_ISSUE_SCAN = 30;
 
-/** Telegram caps callback_data at 64 bytes. uuid(36) + index keeps us well under. */
-const MAX_OPTIONS_AS_BUTTONS = 8;
-
-export type DecisionOption = {
+export type PendingInteraction = {
   id: string;
-  label: string;
-  description?: string | null;
-  style?: string;
+  issueId: string;
+  issueIdentifier?: string;
+  kind: string;
+  title: string;
+  summary?: string | null;
+  status: string;
 };
 
-export type Decision = {
-  id: string;
-  title: string;
-  body?: string | null;
-  status: string;
-  options?: DecisionOption[];
-  inputs?: unknown[];
-  originIssueId?: string | null;
-  expiresAt?: string | null;
+type RawInteraction = {
+  id?: string;
+  kind?: string;
+  status?: string;
+  title?: string;
+  summary?: string | null;
 };
 
 export function isDecisionCallback(data: string): boolean {
   return data.startsWith(CALLBACK_PREFIX);
 }
 
-export function buildDecisionCallback(decisionId: string, optionIndex: number): string {
-  return `${CALLBACK_PREFIX}${decisionId}_${optionIndex}`;
+/** Human label for an interaction kind; unknown kinds fall back to the raw value. */
+export function describeKind(kind: string): string {
+  const labels: Record<string, string> = {
+    ask_user_questions: "Question",
+    request_confirmation: "Confirmation",
+  };
+  return labels[kind] ?? kind.replace(/_/g, " ");
 }
 
-export function parseDecisionCallback(data: string): { decisionId: string; optionIndex: number } | null {
-  if (!isDecisionCallback(data)) return null;
-  const body = data.slice(CALLBACK_PREFIX.length);
-  const separator = body.lastIndexOf("_");
-  if (separator <= 0) return null;
-  const decisionId = body.slice(0, separator);
-  const optionIndex = Number(body.slice(separator + 1));
-  if (!decisionId || !Number.isInteger(optionIndex) || optionIndex < 0) return null;
-  return { decisionId, optionIndex };
+async function fetchIssueInteractions(
+  ctx: PluginContext,
+  baseUrl: string,
+  issueId: string,
+  boardApiToken?: string,
+): Promise<RawInteraction[]> {
+  try {
+    const response = await fetchPaperclipApi(ctx, `${baseUrl}/api/issues/${issueId}/interactions`, {
+      method: "GET",
+      headers: { ...buildPaperclipAuthHeaders(boardApiToken) },
+    });
+    const parsed = (await (response as Response).json()) as unknown;
+    return Array.isArray(parsed) ? (parsed as RawInteraction[]) : [];
+  } catch {
+    // One unreadable issue must not sink the whole command.
+    return [];
+  }
 }
 
-export async function fetchOpenDecisions(
+/**
+ * Collect interactions still waiting on a person, newest issues first.
+ * Returns the scanned count so the caller can be honest about the bound.
+ */
+export async function fetchPendingInteractions(
   ctx: PluginContext,
   baseUrl: string,
   companyId: string,
   boardApiToken?: string,
-): Promise<Decision[]> {
-  const response = await fetchPaperclipApi(
-    ctx,
-    `${baseUrl}/api/companies/${companyId}/decisions?status=open`,
-    { method: "GET", headers: { ...buildPaperclipAuthHeaders(boardApiToken) } },
-  );
-  const parsed = (await (response as Response).json()) as unknown;
-  return Array.isArray(parsed) ? (parsed as Decision[]) : [];
+  scanLimit: number = DEFAULT_ISSUE_SCAN,
+): Promise<{ pending: PendingInteraction[]; scanned: number }> {
+  const issues = await ctx.issues.list({ companyId, limit: scanLimit });
+
+  // Concurrent, but in small batches: one request per issue against a local
+  // server is fine, a burst of 30 is not.
+  const pending: PendingInteraction[] = [];
+  const batchSize = 6;
+  for (let i = 0; i < issues.length; i += batchSize) {
+    const batch = issues.slice(i, i + batchSize);
+    const results = await Promise.all(
+      batch.map(async (issue) => ({
+        issue,
+        interactions: await fetchIssueInteractions(ctx, baseUrl, issue.id, boardApiToken),
+      })),
+    );
+    for (const { issue, interactions } of results) {
+      for (const interaction of interactions) {
+        if (interaction.status !== "pending") continue;
+        pending.push({
+          id: interaction.id ?? "",
+          issueId: issue.id,
+          issueIdentifier: issue.identifier ?? undefined,
+          kind: interaction.kind ?? "unknown",
+          title: interaction.title ?? "(untitled)",
+          summary: interaction.summary ?? null,
+          status: interaction.status,
+        });
+      }
+    }
+  }
+
+  return { pending, scanned: issues.length };
 }
 
-async function fetchDecision(
-  ctx: PluginContext,
-  baseUrl: string,
-  decisionId: string,
-  boardApiToken?: string,
-): Promise<Decision | null> {
-  const response = await fetchPaperclipApi(ctx, `${baseUrl}/api/decisions/${decisionId}`, {
-    method: "GET",
-    headers: { ...buildPaperclipAuthHeaders(boardApiToken) },
-  });
-  const parsed = (await (response as Response).json()) as Decision | null;
-  return parsed && typeof parsed === "object" ? parsed : null;
-}
+export function renderPendingInteraction(item: PendingInteraction, publicUrl?: string): string {
+  const lines = [
+    `${escapeMarkdownV2("🗳")} *${escapeMarkdownV2(item.title)}*`,
+    escapeMarkdownV2(`${describeKind(item.kind)} · ${item.issueIdentifier ?? item.issueId}`),
+  ];
 
-/**
- * A decision that collects free-text inputs cannot be answered with buttons
- * alone, so we say so and point at the web UI rather than silently submitting
- * an incomplete answer.
- */
-function requiresTypedInput(decision: Decision): boolean {
-  return Array.isArray(decision.inputs) && decision.inputs.length > 0;
-}
-
-export function renderDecision(decision: Decision, publicUrl?: string): string {
-  const lines = [`${escapeMarkdownV2("🗳")} *${escapeMarkdownV2(decision.title)}*`];
-
-  const body = (decision.body ?? "").trim();
-  if (body) {
-    const excerpt = body.length > 400 ? `${body.slice(0, 400)}…` : body;
+  const summary = (item.summary ?? "").trim();
+  if (summary) {
+    const excerpt = summary.length > 350 ? `${summary.slice(0, 350)}…` : summary;
     lines.push("", escapeMarkdownV2(excerpt));
   }
 
-  if (decision.expiresAt) {
-    lines.push("", escapeMarkdownV2(`Expires: ${decision.expiresAt}`));
-  }
-
-  if (requiresTypedInput(decision)) {
-    const where = publicUrl ? ` ${publicUrl}` : "";
-    lines.push("", escapeMarkdownV2(`This one needs typed input — decide it in the web UI:${where}`));
+  // Answering needs a form (free text, per-question picks), which Telegram
+  // buttons cannot render — so link out rather than pretend to collect it.
+  if (publicUrl && item.issueIdentifier) {
+    lines.push("", escapeMarkdownV2(`Answer: ${publicUrl}/decisions`));
   }
 
   return lines.join("\n");
 }
 
-export function buildDecisionKeyboard(
-  decision: Decision,
-): Array<Array<{ text: string; callback_data: string }>> | undefined {
-  if (requiresTypedInput(decision)) return undefined;
-  const options = (decision.options ?? []).slice(0, MAX_OPTIONS_AS_BUTTONS);
-  if (options.length === 0) return undefined;
-
-  const styleMark: Record<string, string> = { destructive: "⚠️ ", primary: "✅ " };
-  return options.map((option, index) => [
-    {
-      text: `${styleMark[option.style ?? ""] ?? ""}${option.label}`.slice(0, 64),
-      callback_data: buildDecisionCallback(decision.id, index),
-    },
-  ]);
-}
-
-/**
- * Apply a decision chosen from a Telegram button.
- *
- * The option index is resolved against the decision as it is NOW, not as it
- * was when the message was sent — so a decision that was cancelled, expired,
- * or already decided in the web UI reports that instead of silently applying
- * an answer to a stale option set.
- */
-export async function applyDecisionCallback(
-  ctx: PluginContext,
-  data: string,
-  baseUrl: string,
-  chatId: string,
-  boardApiToken?: string,
-): Promise<{ ok: boolean; message: string }> {
-  const parsed = parseDecisionCallback(data);
-  if (!parsed) return { ok: false, message: "Unrecognised decision button" };
-
-  let decision: Decision | null;
-  try {
-    decision = await fetchDecision(ctx, baseUrl, parsed.decisionId, boardApiToken);
-  } catch (err) {
-    ctx.logger.warn("Could not load decision for callback", { error: String(err) });
-    return { ok: false, message: "Could not load that decision" };
-  }
-
-  if (!decision) return { ok: false, message: "That decision no longer exists" };
-  if (decision.status !== "open") return { ok: false, message: `Already ${decision.status}` };
-
-  const option = (decision.options ?? [])[parsed.optionIndex];
-  if (!option) return { ok: false, message: "That option is no longer available" };
-
-  try {
-    await fetchPaperclipApi(ctx, `${baseUrl}/api/decisions/${decision.id}/decide`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...buildPaperclipAuthHeaders(boardApiToken) },
-      // idempotencyKey guards against Telegram delivering the same callback
-      // twice, which would otherwise apply the option's effects twice.
-      body: JSON.stringify({
-        optionId: option.id,
-        idempotencyKey: `telegram:${chatId}:${decision.id}:${option.id}`,
-      }),
-    });
-  } catch (err) {
-    ctx.logger.warn("Decision decide call failed", { decisionId: decision.id, error: String(err) });
-    return { ok: false, message: "Could not record that decision" };
-  }
-
-  return { ok: true, message: option.label };
-}
-
-export async function sendDecisionList(
+export async function sendPendingList(
   ctx: PluginContext,
   token: string,
   chatId: string,
-  decisions: Decision[],
+  found: { pending: PendingInteraction[]; scanned: number },
   opts: { messageThreadId?: number; publicUrl?: string; limit?: number } = {},
 ): Promise<void> {
-  if (decisions.length === 0) {
-    await sendMessage(ctx, token, chatId, "Nothing is waiting on your input.", {
-      messageThreadId: opts.messageThreadId,
-    });
-    return;
-  }
+  const { pending, scanned } = found;
 
-  const limit = opts.limit ?? 5;
-  for (const decision of decisions.slice(0, limit)) {
-    await sendMessage(ctx, token, chatId, renderDecision(decision, opts.publicUrl), {
-      parseMode: "MarkdownV2",
-      messageThreadId: opts.messageThreadId,
-      inlineKeyboard: buildDecisionKeyboard(decision),
-    });
-  }
-
-  if (decisions.length > limit) {
+  if (pending.length === 0) {
     await sendMessage(
       ctx,
       token,
       chatId,
-      `…and ${decisions.length - limit} more. Showing the oldest ${limit}.`,
+      `Nothing is waiting on your input (checked the ${scanned} most recent issues).`,
+      { messageThreadId: opts.messageThreadId },
+    );
+    return;
+  }
+
+  const limit = opts.limit ?? 5;
+  for (const item of pending.slice(0, limit)) {
+    await sendMessage(ctx, token, chatId, renderPendingInteraction(item, opts.publicUrl), {
+      parseMode: "MarkdownV2",
+      messageThreadId: opts.messageThreadId,
+    });
+  }
+
+  if (pending.length > limit) {
+    await sendMessage(
+      ctx,
+      token,
+      chatId,
+      `…and ${pending.length - limit} more waiting.`,
       { messageThreadId: opts.messageThreadId },
     );
   }

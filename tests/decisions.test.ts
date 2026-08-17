@@ -1,148 +1,136 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 
-const sent: Array<{ text: string; inlineKeyboard?: unknown }> = [];
-const apiCalls: Array<{ url: string; method?: string; body?: string }> = [];
-let apiResponses: unknown[] = [];
+const sent: string[] = [];
+const apiCalls: string[] = [];
+let interactionsByIssue: Record<string, unknown[]> = {};
 
 vi.mock("../src/telegram-api.js", () => ({
-  sendMessage: vi.fn(async (_c: unknown, _t: string, _chat: string, text: string, opts?: { inlineKeyboard?: unknown }) => {
-    sent.push({ text, inlineKeyboard: opts?.inlineKeyboard });
+  sendMessage: vi.fn(async (_c: unknown, _t: string, _chat: string, text: string) => {
+    sent.push(text);
     return { ok: true };
   }),
   escapeMarkdownV2: (s: string) => s,
 }));
 
 vi.mock("../src/paperclip-api.js", () => ({
-  buildPaperclipAuthHeaders: (token?: string) => (token ? { Authorization: `Bearer ${token}` } : {}),
-  fetchPaperclipApi: vi.fn(async (_ctx: unknown, url: string, init?: { method?: string; body?: string }) => {
-    apiCalls.push({ url, method: init?.method, body: init?.body });
-    const next = apiResponses.shift();
-    return { json: async () => next };
+  buildPaperclipAuthHeaders: (t?: string) => (t ? { Authorization: `Bearer ${t}` } : {}),
+  fetchPaperclipApi: vi.fn(async (_ctx: unknown, url: string) => {
+    apiCalls.push(url);
+    const issueId = url.match(/\/issues\/([^/]+)\/interactions/)?.[1] ?? "";
+    if (issueId === "boom") throw new Error("unreadable");
+    return { json: async () => interactionsByIssue[issueId] ?? [] };
   }),
 }));
 
-const {
-  buildDecisionCallback,
-  parseDecisionCallback,
-  isDecisionCallback,
-  buildDecisionKeyboard,
-  applyDecisionCallback,
-  sendDecisionList,
-  fetchOpenDecisions,
-} = await import("../src/decisions.js");
+const { fetchPendingInteractions, sendPendingList, renderPendingInteraction, describeKind } =
+  await import("../src/decisions.js");
 
-const ctx = { logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as PluginContext;
-const DEC_ID = "11111111-2222-4333-8444-555555555555";
-
-function decision(overrides: Record<string, unknown> = {}) {
+function makeCtx(issues: Array<{ id: string; identifier?: string }>): PluginContext {
   return {
-    id: DEC_ID,
-    title: "Ship or hold?",
-    body: "The release gate is red.",
-    status: "open",
-    options: [
-      { id: "ship", label: "Ship it", style: "primary" },
-      { id: "hold", label: "Hold", style: "destructive" },
-    ],
-    ...overrides,
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    issues: { list: vi.fn(async () => issues) },
+  } as unknown as PluginContext;
+}
+
+function interaction(over: Record<string, unknown> = {}) {
+  return {
+    id: "int-1",
+    kind: "ask_user_questions",
+    status: "pending",
+    title: 'Who is "the first client"?',
+    summary: "BLA-76 references a first client that is not named anywhere.",
+    ...over,
   };
 }
 
 beforeEach(() => {
   sent.length = 0;
   apiCalls.length = 0;
-  apiResponses = [];
+  interactionsByIssue = {};
 });
 
-describe("callback encoding", () => {
-  it("round-trips decision id and option index", () => {
-    const data = buildDecisionCallback(DEC_ID, 1);
-    expect(isDecisionCallback(data)).toBe(true);
-    expect(parseDecisionCallback(data)).toEqual({ decisionId: DEC_ID, optionIndex: 1 });
+describe("fetchPendingInteractions", () => {
+  it("collects pending interactions across issues", async () => {
+    interactionsByIssue = {
+      i1: [interaction()],
+      i2: [interaction({ id: "int-2", status: "answered" })],
+    };
+    const ctx = makeCtx([{ id: "i1", identifier: "BLA-134" }, { id: "i2", identifier: "BLA-2" }]);
+
+    const { pending, scanned } = await fetchPendingInteractions(ctx, "http://x", "c1", "tok");
+
+    // Only the pending one; "answered" is history, not a queue item.
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({ issueIdentifier: "BLA-134", kind: "ask_user_questions" });
+    expect(scanned).toBe(2);
   });
 
-  it("stays inside Telegram's 64-byte callback_data limit", () => {
-    expect(Buffer.byteLength(buildDecisionCallback(DEC_ID, 7))).toBeLessThanOrEqual(64);
+  it("does not query /decisions — that endpoint is a different, empty feature", async () => {
+    interactionsByIssue = { i1: [interaction()] };
+    await fetchPendingInteractions(makeCtx([{ id: "i1" }]), "http://x", "c1", "tok");
+    expect(apiCalls.every((u) => u.includes("/interactions"))).toBe(true);
+    expect(apiCalls.some((u) => /\/decisions(\?|$)/.test(u))).toBe(false);
   });
 
-  it("does not claim other handlers' callbacks", () => {
-    expect(isDecisionCallback("approve_1")).toBe(false);
-    expect(isDecisionCallback("wfc_abc_0")).toBe(false);
-  });
-});
-
-describe("buildDecisionKeyboard", () => {
-  it("renders one button per option", () => {
-    const keyboard = buildDecisionKeyboard(decision())!;
-    expect(keyboard.flat().map((b) => b.text)).toEqual(["✅ Ship it", "⚠️ Hold"]);
+  it("survives an unreadable issue rather than failing the whole command", async () => {
+    interactionsByIssue = { ok1: [interaction()] };
+    const ctx = makeCtx([{ id: "boom" }, { id: "ok1" }]);
+    const { pending } = await fetchPendingInteractions(ctx, "http://x", "c1", "tok");
+    expect(pending).toHaveLength(1);
   });
 
-  it("offers no buttons when the decision needs typed input", () => {
-    // Buttons alone cannot supply input values, and submitting without them
-    // would record an incomplete answer.
-    expect(buildDecisionKeyboard(decision({ inputs: [{ id: "why" }] }))).toBeUndefined();
-  });
-});
-
-describe("applyDecisionCallback", () => {
-  it("resolves the option against the CURRENT decision and decides", async () => {
-    apiResponses = [decision(), { ok: true }];
-
-    const result = await applyDecisionCallback(ctx, buildDecisionCallback(DEC_ID, 0), "http://x", "chat-1", "tok");
-
-    expect(result).toEqual({ ok: true, message: "Ship it" });
-    const decideCall = apiCalls.at(-1)!;
-    expect(decideCall.url).toContain(`/api/decisions/${DEC_ID}/decide`);
-    expect(JSON.parse(decideCall.body!)).toMatchObject({ optionId: "ship" });
-  });
-
-  it("sends an idempotency key so a duplicate tap cannot apply effects twice", async () => {
-    apiResponses = [decision(), { ok: true }];
-    await applyDecisionCallback(ctx, buildDecisionCallback(DEC_ID, 0), "http://x", "chat-1", "tok");
-    expect(JSON.parse(apiCalls.at(-1)!.body!).idempotencyKey).toBe(`telegram:chat-1:${DEC_ID}:ship`);
-  });
-
-  it("refuses when the decision was already decided elsewhere", async () => {
-    apiResponses = [decision({ status: "decided" })];
-    const result = await applyDecisionCallback(ctx, buildDecisionCallback(DEC_ID, 0), "http://x", "chat-1", "tok");
-    expect(result).toEqual({ ok: false, message: "Already decided" });
-    // Crucially, no decide call was made against the stale option set.
-    expect(apiCalls.filter((c) => c.url.includes("/decide"))).toHaveLength(0);
-  });
-
-  it("refuses when the option index no longer exists", async () => {
-    apiResponses = [decision({ options: [{ id: "only", label: "Only" }] })];
-    const result = await applyDecisionCallback(ctx, buildDecisionCallback(DEC_ID, 5), "http://x", "chat-1", "tok");
-    expect(result.ok).toBe(false);
-    expect(apiCalls.filter((c) => c.url.includes("/decide"))).toHaveLength(0);
+  it("bounds how many issues it scans", async () => {
+    const many = Array.from({ length: 100 }, (_, i) => ({ id: `i${i}` }));
+    const ctx = makeCtx(many);
+    await fetchPendingInteractions(ctx, "http://x", "c1", "tok", 10);
+    expect((ctx.issues.list as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith({ companyId: "c1", limit: 10 });
   });
 });
 
-describe("sendDecisionList", () => {
-  it("says nothing is waiting when the queue is empty", async () => {
-    await sendDecisionList(ctx, "tok", "chat-1", []);
-    expect(sent.at(-1)?.text).toBe("Nothing is waiting on your input.");
+describe("sendPendingList", () => {
+  it("says how far it looked when nothing is pending", async () => {
+    // "Nothing pending" is only trustworthy if it says what it checked.
+    await sendPendingList(makeCtx([]), "tok", "chat-1", { pending: [], scanned: 30 });
+    expect(sent.at(-1)).toContain("30 most recent issues");
   });
 
-  it("caps the list and says how many were withheld", async () => {
-    const many = Array.from({ length: 7 }, (_, i) => decision({ id: `${DEC_ID.slice(0, -1)}${i}`, title: `D${i}` }));
-    await sendDecisionList(ctx, "tok", "chat-1", many, { limit: 2 });
+  it("caps output and reports the remainder", async () => {
+    const pending = Array.from({ length: 7 }, (_, i) => ({
+      id: `x${i}`, issueId: `i${i}`, issueIdentifier: `BLA-${i}`,
+      kind: "ask_user_questions", title: `Q${i}`, summary: null, status: "pending",
+    }));
+    await sendPendingList(makeCtx([]), "tok", "chat-1", { pending, scanned: 30 }, { limit: 2 });
     expect(sent).toHaveLength(3);
-    expect(sent.at(-1)?.text).toContain("and 5 more");
+    expect(sent.at(-1)).toContain("5 more");
   });
 });
 
-describe("fetchOpenDecisions", () => {
-  it("asks only for open decisions", async () => {
-    apiResponses = [[decision()]];
-    const list = await fetchOpenDecisions(ctx, "http://x", "company-1", "tok");
-    expect(apiCalls[0]!.url).toContain("/decisions?status=open");
-    expect(list).toHaveLength(1);
+describe("renderPendingInteraction", () => {
+  it("shows the kind and the issue it belongs to", () => {
+    const text = renderPendingInteraction({
+      id: "1", issueId: "i1", issueIdentifier: "BLA-134",
+      kind: "ask_user_questions", title: "Who is the first client?",
+      summary: "Not named anywhere.", status: "pending",
+    });
+    expect(text).toContain("Who is the first client?");
+    expect(text).toContain("Question");
+    expect(text).toContain("BLA-134");
   });
 
-  it("returns an empty list when the API returns a non-array", async () => {
-    apiResponses = [{ error: "nope" }];
-    await expect(fetchOpenDecisions(ctx, "http://x", "company-1", "tok")).resolves.toEqual([]);
+  it("links out rather than pretending buttons can answer a form", () => {
+    const text = renderPendingInteraction(
+      { id: "1", issueId: "i1", issueIdentifier: "BLA-134", kind: "ask_user_questions", title: "Q", status: "pending" },
+      "https://paperclip.example",
+    );
+    expect(text).toContain("https://paperclip.example/decisions");
+  });
+});
+
+describe("describeKind", () => {
+  it("labels known kinds and degrades gracefully", () => {
+    expect(describeKind("ask_user_questions")).toBe("Question");
+    expect(describeKind("request_confirmation")).toBe("Confirmation");
+    expect(describeKind("some_new_kind")).toBe("some new kind");
   });
 });
