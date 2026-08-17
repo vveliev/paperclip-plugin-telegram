@@ -1,6 +1,6 @@
 import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
-import { METRIC_NAMES } from "./constants.js";
+import { METRIC_NAMES, DEFAULT_CONFIG } from "./constants.js";
 import { countAgents } from "./agent-status.js";
 import { fetchAttention, sendAttentionList, describeDecisionsError } from "./decisions.js";
 import { handleAcpCommand } from "./acp-bridge.js";
@@ -14,6 +14,32 @@ type BotCommand = {
 // Leaves headroom below Telegram's 4096-char hard limit for /agents so a
 // company with many agents doesn't produce a message the API silently drops.
 const AGENTS_MESSAGE_CHAR_BUDGET = 3500;
+
+// The subset of TelegramConfig /settings reports on. Sourced from the
+// company's resolved plugin config (see worker.ts's effectiveConfig) — these
+// toggles already exist as admin-configured state, so /settings surfaces
+// them rather than inventing a parallel per-chat copy.
+export type ChatSettingsConfig = {
+  topicRouting: boolean;
+  notifyOnIssueCreated: boolean;
+  notifyOnIssueDone: boolean;
+  notifyOnIssueAssigned: boolean;
+  notifyOnApprovalCreated: boolean;
+  notifyOnAgentError: boolean;
+  notifyOnAgentRunStarted: boolean;
+  notifyOnAgentRunFinished: boolean;
+};
+
+const DEFAULT_SETTINGS_CONFIG: ChatSettingsConfig = {
+  topicRouting: DEFAULT_CONFIG.topicRouting,
+  notifyOnIssueCreated: DEFAULT_CONFIG.notifyOnIssueCreated,
+  notifyOnIssueDone: DEFAULT_CONFIG.notifyOnIssueDone,
+  notifyOnIssueAssigned: DEFAULT_CONFIG.notifyOnIssueAssigned,
+  notifyOnApprovalCreated: DEFAULT_CONFIG.notifyOnApprovalCreated,
+  notifyOnAgentError: DEFAULT_CONFIG.notifyOnAgentError,
+  notifyOnAgentRunStarted: DEFAULT_CONFIG.notifyOnAgentRunStarted,
+  notifyOnAgentRunFinished: DEFAULT_CONFIG.notifyOnAgentRunFinished,
+};
 
 type TopicMappingRecord = {
   projectId?: string;
@@ -36,6 +62,7 @@ export const BOT_COMMANDS: BotCommand[] = [
   { command: "agents", description: "List all agents and what they're doing" },
   { command: "approve", description: "Approve a pending request by its ID" },
   { command: "help", description: "Show this list of commands" },
+  { command: "settings", description: "Show connection, routing, and notification settings" },
   { command: "acp", description: "Manage agent sessions: start, check, cancel, or close" },
   { command: "commands", description: "Manage custom commands: list, import, run, or delete" },
   { command: "connect", description: "Link this chat to a Paperclip company" },
@@ -55,6 +82,7 @@ export async function handleCommand(
   companyId?: string,
   boardApiToken?: string,
   maxAgentsPerThread?: number,
+  settingsConfig?: ChatSettingsConfig,
 ): Promise<void> {
   await ctx.metrics.write(METRIC_NAMES.commandsHandled, 1);
 
@@ -84,6 +112,9 @@ export async function handleCommand(
     case "start":
     case "help":
       await handleHelp(ctx, token, chatId, messageThreadId);
+      break;
+    case "settings":
+      await handleSettings(ctx, token, chatId, messageThreadId, settingsConfig ?? DEFAULT_SETTINGS_CONFIG);
       break;
     case "connect":
       await handleConnect(ctx, token, chatId, args, messageThreadId);
@@ -369,6 +400,67 @@ async function handleHelp(
       (cmd) => `/${escapeMarkdownV2(cmd.command)} \\- ${escapeMarkdownV2(cmd.description)}`,
     ),
   ];
+
+  await sendMessage(ctx, token, chatId, lines.join("\n"), {
+    parseMode: "MarkdownV2",
+    messageThreadId,
+  });
+}
+
+/**
+ * /settings — a read-only summary of this chat's connection and the
+ * company's notification/routing config. Deliberately does not add new
+ * per-chat state: /connect already tracks link status, /connect_topic and
+ * /topics already track forum-topic routing, and notification toggles are
+ * company-wide config set in the plugin's admin UI. This just surfaces all
+ * three in one place so a user can tell what's on without checking three
+ * different commands.
+ */
+async function handleSettings(
+  ctx: PluginContext,
+  token: string,
+  chatId: string,
+  messageThreadId: number | undefined,
+  settings: ChatSettingsConfig,
+): Promise<void> {
+  const link = (await ctx.state.get({
+    scopeKind: "instance",
+    stateKey: `chat_${chatId}`,
+  })) as { companyId?: string; companyName?: string; linkedAt?: string } | null;
+
+  const lines = [escapeMarkdownV2("⚙️") + " *Settings*", ""];
+
+  if (link?.companyId) {
+    const since = link.linkedAt ? ` \\(since ${escapeMarkdownV2(link.linkedAt.split("T")[0] ?? link.linkedAt)}\\)` : "";
+    lines.push(`${escapeMarkdownV2("🔗")} Linked to *${escapeMarkdownV2(link.companyName ?? link.companyId)}*${since}`);
+  } else {
+    lines.push(`${escapeMarkdownV2("🔗")} ${escapeMarkdownV2("Not linked. Use /connect <company> to link this chat.")}`);
+  }
+
+  const topicMap = await getTopicMap(ctx, chatId);
+  const topicCount = Object.keys(topicMap).length;
+  const topicSuffix = topicCount > 0
+    ? ` \\(${topicCount} mapping${topicCount === 1 ? "" : "s"}, see /topics\\)`
+    : "";
+  lines.push(`${escapeMarkdownV2("🧭")} Topic routing: *${escapeMarkdownV2(settings.topicRouting ? "on" : "off")}*${topicSuffix}`);
+
+  lines.push("");
+  lines.push(escapeMarkdownV2("🔔") + " *Notifications*");
+  const notificationToggles: Array<[string, boolean]> = [
+    ["Issue created", settings.notifyOnIssueCreated],
+    ["Issue done", settings.notifyOnIssueDone],
+    ["Issue assigned", settings.notifyOnIssueAssigned],
+    ["Approval requested", settings.notifyOnApprovalCreated],
+    ["Agent error", settings.notifyOnAgentError],
+    ["Agent run started", settings.notifyOnAgentRunStarted],
+    ["Agent run finished", settings.notifyOnAgentRunFinished],
+  ];
+  for (const [label, enabled] of notificationToggles) {
+    lines.push(`${enabled ? escapeMarkdownV2("✅") : escapeMarkdownV2("⬜")} ${escapeMarkdownV2(label)}`);
+  }
+
+  lines.push("");
+  lines.push(escapeMarkdownV2("Notification and routing toggles are managed by a company admin in the plugin config."));
 
   await sendMessage(ctx, token, chatId, lines.join("\n"), {
     parseMode: "MarkdownV2",
