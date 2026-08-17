@@ -356,6 +356,7 @@ export async function resolveCompanyRuntimes(
   ctx: PluginContext,
   startupConfig: TelegramConfig,
   predicate: (config: TelegramConfig) => boolean,
+  companies?: Array<{ id: string }>,
 ): Promise<TelegramCompanyRuntime[]> {
   // `ctx.companies.list()` is the natural way to enumerate companies, but it is
   // not reliable from setup(): on hosts that enforce per-invocation scoping it
@@ -370,10 +371,14 @@ export async function resolveCompanyRuntimes(
   //
   // Discovery is not actually required: the company is already known from the
   // stored board-access state. Fall back to it rather than lose inbound.
-  const companies = await listCompaniesForStartup(ctx);
+  //
+  // Callers that already resolved the startup company list (setup() does, to
+  // seed loadStartupConfig's fallback) pass it in directly so we don't hit
+  // companies.list()/board-access state a second time for the same startup.
+  const resolvedCompanies = companies ?? (await listCompaniesForStartup(ctx));
   const runtimes: TelegramCompanyRuntime[] = [];
 
-  for (const company of companies) {
+  for (const company of resolvedCompanies) {
     let scopedConfig: Record<string, unknown>;
     try {
       scopedConfig = await ctx.config.get(company.id);
@@ -594,7 +599,17 @@ async function resolveCompanyIdOrNull(ctx: PluginContext, chatId: string): Promi
 
 const plugin = definePlugin({
   async setup(ctx) {
-    const rawConfig = await loadStartupConfig(ctx, {} as Record<string, unknown>);
+    // Resolved once up front: loadStartupConfig needs a fallback company id to
+    // retry the scoped config.get() when the unscoped call fails for lack of
+    // company context (see loadStartupConfig), and resolveCompanyRuntimes
+    // needs the same list right after — pass it through instead of
+    // re-deriving it twice at startup.
+    const startupCompanies = await listCompaniesForStartup(ctx);
+    const rawConfig = await loadStartupConfig(
+      ctx,
+      {} as Record<string, unknown>,
+      startupCompanies[0]?.id ?? null,
+    );
     ctx.logger.info("Telegram plugin config loaded");
     const config = rawConfig as unknown as TelegramConfig;
     const baseUrl = config.paperclipBaseUrl || "http://localhost:3100";
@@ -621,6 +636,7 @@ const plugin = definePlugin({
       ctx,
       config,
       (effectiveConfig) => Boolean(effectiveConfig.enableCommands || effectiveConfig.enableInbound),
+      startupCompanies,
     );
     if (pollingRuntimes.length === 0) {
       ctx.logger.warn("No company-scoped Telegram bot token is resolvable during startup; setup will continue without polling");
