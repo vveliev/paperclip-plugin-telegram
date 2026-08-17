@@ -1584,7 +1584,20 @@ export async function handleUpdate(
     const boardApiToken = BOARD_TOKEN_COMMANDS.has(command)
       ? await resolveBoardApiToken(ctx, effectiveConfig, companyId)
       : undefined;
-    await handleCommand(ctx, token, chatId, command, args, threadId, effectiveBaseUrl, effectivePublicUrl, companyId, boardApiToken, effectiveConfig.maxAgentsPerThread);
+    await handleCommand(
+      ctx, token, chatId, command, args, threadId, effectiveBaseUrl, effectivePublicUrl, companyId, boardApiToken,
+      effectiveConfig.maxAgentsPerThread,
+      {
+        topicRouting: effectiveConfig.topicRouting,
+        notifyOnIssueCreated: effectiveConfig.notifyOnIssueCreated,
+        notifyOnIssueDone: effectiveConfig.notifyOnIssueDone,
+        notifyOnIssueAssigned: effectiveConfig.notifyOnIssueAssigned,
+        notifyOnApprovalCreated: effectiveConfig.notifyOnApprovalCreated,
+        notifyOnAgentError: effectiveConfig.notifyOnAgentError,
+        notifyOnAgentRunStarted: effectiveConfig.notifyOnAgentRunStarted,
+        notifyOnAgentRunFinished: effectiveConfig.notifyOnAgentRunFinished,
+      },
+    );
     return;
   }
 
