@@ -30,10 +30,10 @@ export default defineConfig({
        * red build green.
        */
       thresholds: {
-        statements: 72,
-        branches: 77,
-        functions: 92,
-        lines: 72,
+        statements: 73,
+        branches: 78,
+        functions: 93,
+        lines: 73,
 
         // Modules where a regression is a user-visible failure, held higher.
         "src/decisions.ts": { statements: 98, functions: 100 },
