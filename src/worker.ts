@@ -57,6 +57,7 @@ import {
   type TelegramRuntimeHealth,
 } from "./runtime-token.js";
 import { loadStartupConfig, resolveCompatibleConfig } from "./config-compat.js";
+import { isChoiceCallback, resolveChoiceCallback } from "./workflow-choice.js";
 
 type TelegramConfig = {
   telegramBotTokenRef: string;
@@ -1604,6 +1605,22 @@ async function handleCallbackQuery(
   const chatId = query.message?.chat.id ? String(query.message.chat.id) : null;
   const messageId = query.message?.message_id;
   const originalMessageText = query.message?.text?.trim() ?? "";
+
+  // A workflow `choice` step is parked waiting on this press. Resolve it first
+  // and acknowledge, so the spinner on the button clears immediately.
+  if (isChoiceCallback(data)) {
+    const resolved = resolveChoiceCallback(data);
+    await answerCallbackQuery(
+      ctx,
+      token,
+      query.id,
+      resolved ? "Got it" : "That choice has expired",
+    );
+    if (!resolved) {
+      ctx.logger.info("Choice callback had no pending workflow", { actor });
+    }
+    return;
+  }
 
   if (data.startsWith("approve_")) {
     const approvalId = data.replace("approve_", "");

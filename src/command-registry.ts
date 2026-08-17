@@ -1,6 +1,7 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { METRIC_NAMES } from "./constants.js";
+import { askChoice, normalizeOptions } from "./workflow-choice.js";
 
 // --- Types ---
 
@@ -53,6 +54,21 @@ type SetStateStep = WorkflowStepBase & {
   value: string;
 };
 
+/**
+ * Ask the user to pick from a list, in chat, and use the answer downstream.
+ *
+ * `options` takes plain strings, or `{ label, value }` when the text shown
+ * should differ from the value fed to `{{prev.result}}`. This is what turns a
+ * workflow into a form: each choice step is one field.
+ */
+type ChoiceStep = WorkflowStepBase & {
+  type: "choice";
+  prompt: string;
+  options: Array<string | { label: string; value: string }>;
+  timeoutMs?: number;
+  columns?: number;
+};
+
 type WorkflowStep =
   | FetchIssueStep
   | InvokeAgentStep
@@ -60,7 +76,8 @@ type WorkflowStep =
   | SendMessageStep
   | CreateIssueStep
   | WaitApprovalStep
-  | SetStateStep;
+  | SetStateStep
+  | ChoiceStep;
 
 type CustomCommand = {
   name: string;
@@ -446,6 +463,36 @@ async function executeStep(
         { status: "pending", createdAt: Date.now() },
       );
       return "awaiting_approval";
+    }
+
+    case "choice": {
+      const prompt = interpolate(step.prompt);
+      const options = normalizeOptions(
+        step.options.map((option) =>
+          typeof option === "string"
+            ? interpolate(option)
+            : { label: interpolate(option.label), value: interpolate(option.value) },
+        ),
+      );
+      if (options.length === 0) {
+        await sendMessage(ctx, token, chatId, `Step "${step.id}" has no options to choose from.`, {
+          messageThreadId,
+        });
+        return null;
+      }
+
+      const chosen = await askChoice(ctx, token, chatId, prompt, options, {
+        timeoutMs: step.timeoutMs,
+        messageThreadId,
+        columns: step.columns,
+      });
+
+      if (chosen === null) {
+        await sendMessage(ctx, token, chatId, "No choice was made in time — stopping here.", {
+          messageThreadId,
+        });
+      }
+      return chosen;
     }
 
     case "set_state": {
