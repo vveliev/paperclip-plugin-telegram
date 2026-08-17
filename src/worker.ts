@@ -48,6 +48,12 @@ import {
   resolveWorkflowApprovalCallback,
 } from "./command-registry.js";
 import { handleRegisterWatch, checkWatches } from "./watch-registry.js";
+import {
+  isInteractionAnswerCallback,
+  resolveInteractionAnswerCallback,
+  finalizeReplyRejection,
+  isInteractionReplyMapping,
+} from "./interaction-answers.js";
 import { AGENT_ERROR_DEDUPLICATION_WINDOW_MS, DEFAULT_CONFIG, METRIC_NAMES } from "./constants.js";
 import { EscalationManager } from "./escalation.js";
 import type { EscalationEvent } from "./escalation.js";
@@ -1564,6 +1570,13 @@ export async function handleUpdate(
           error: String(err),
         });
       }
+    } else if (isInteractionReplyMapping(mapping)) {
+      // Replying to a confirmation prompt is the reason text for rejecting
+      // it — the button-less half of the accept/reject flow (BLA-154). See
+      // interaction-answers.ts for why rejection, not acceptance, needs this.
+      const boardApiToken = await resolveBoardApiToken(ctx, config, mapping.companyId);
+      await finalizeReplyRejection(ctx, token, baseUrl, boardApiToken, mapping, text, chatId);
+      await ctx.metrics.write(METRIC_NAMES.inboundRouted, 1);
     }
   }
 }
@@ -1587,6 +1600,11 @@ async function handleCallbackQuery(
   // adjacent so the two approval flows are read together.
   if (isWorkflowApprovalCallback(data)) {
     await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
+    return;
+  }
+
+  if (isInteractionAnswerCallback(data)) {
+    await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
     return;
   }
 
