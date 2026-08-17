@@ -1542,8 +1542,17 @@ export async function handleUpdate(
     const handledCustom = await tryCustomCommand(ctx, token, chatId, command, args, threadId, companyId);
     if (handledCustom) return;
 
-    // Built-in commands
-    const boardApiToken = command === "approve" ? await resolveBoardApiToken(ctx, effectiveConfig, companyId) : undefined;
+    // Built-in commands.
+    //
+    // Commands that call board-only Paperclip endpoints need the board token
+    // resolved up front; without it the request goes out unauthenticated and
+    // the user sees a bare 403. Keep this list in step with the handlers that
+    // take a boardApiToken argument — it is only resolved on demand because
+    // resolving a secret on every /help would be wasteful.
+    const BOARD_TOKEN_COMMANDS = new Set(["approve", "decisions"]);
+    const boardApiToken = BOARD_TOKEN_COMMANDS.has(command)
+      ? await resolveBoardApiToken(ctx, effectiveConfig, companyId)
+      : undefined;
     await handleCommand(ctx, token, chatId, command, args, threadId, effectiveBaseUrl, effectivePublicUrl, companyId, boardApiToken, effectiveConfig.maxAgentsPerThread);
     return;
   }
