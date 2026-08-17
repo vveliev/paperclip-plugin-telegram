@@ -1,7 +1,6 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { METRIC_NAMES } from "./constants.js";
-import { askChoice, normalizeOptions } from "./workflow-choice.js";
 
 // --- Types ---
 
@@ -54,21 +53,6 @@ type SetStateStep = WorkflowStepBase & {
   value: string;
 };
 
-/**
- * Ask the user to pick from a list, in chat, and use the answer downstream.
- *
- * `options` takes plain strings, or `{ label, value }` when the text shown
- * should differ from the value fed to `{{prev.result}}`. This is what turns a
- * workflow into a form: each choice step is one field.
- */
-type ChoiceStep = WorkflowStepBase & {
-  type: "choice";
-  prompt: string;
-  options: Array<string | { label: string; value: string }>;
-  timeoutMs?: number;
-  columns?: number;
-};
-
 type WorkflowStep =
   | FetchIssueStep
   | InvokeAgentStep
@@ -76,8 +60,7 @@ type WorkflowStep =
   | SendMessageStep
   | CreateIssueStep
   | WaitApprovalStep
-  | SetStateStep
-  | ChoiceStep;
+  | SetStateStep;
 
 type CustomCommand = {
   name: string;
@@ -465,36 +448,18 @@ async function executeStep(
       return "awaiting_approval";
     }
 
-    case "choice": {
-      const prompt = interpolate(step.prompt);
-      const options = normalizeOptions(
-        step.options.map((option) =>
-          typeof option === "string"
-            ? interpolate(option)
-            : { label: interpolate(option.label), value: interpolate(option.value) },
-        ),
-      );
-      if (options.length === 0) {
-        await sendMessage(ctx, token, chatId, `Step "${step.id}" has no options to choose from.`, {
-          messageThreadId,
-        });
-        return null;
-      }
-
-      const chosen = await askChoice(ctx, token, chatId, prompt, options, {
-        timeoutMs: step.timeoutMs,
-        messageThreadId,
-        columns: step.columns,
-      });
-
-      if (chosen === null) {
-        await sendMessage(ctx, token, chatId, "No choice was made in time — stopping here.", {
-          messageThreadId,
-        });
-      }
-      return chosen;
-    }
-
+    // NOTE: there is deliberately no "choice" step.
+    //
+    // A step that asks the user to pick and waits for the answer cannot work
+    // here: updates are processed strictly sequentially, so a workflow that
+    // blocks on a button press blocks the loop that would deliver it. The
+    // press can never arrive and the run stalls until it times out.
+    //
+    // `wait_approval` has the same defect today — its cmd_approve_* buttons are
+    // handled nowhere, so a workflow reaching it parks forever. Both need the
+    // workflow engine to persist its continuation and resume from a callback,
+    // which does not exist yet. /choose shows the stateless pattern that does
+    // work when a single step is all that is needed.
     case "set_state": {
       const key = interpolate(step.key);
       const value = interpolate(step.value);

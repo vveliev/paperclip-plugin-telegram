@@ -26,7 +26,7 @@ import {
   formatAgentRunFinished,
   type IssueLinksOpts,
 } from "./formatters.js";
-import { handleCommand, resolveNotificationThreadId, BOT_COMMANDS } from "./commands.js";
+import { handleCommand, completeAgentPick, resolveNotificationThreadId, BOT_COMMANDS } from "./commands.js";
 import {
   routeMessageToAgent,
   handleHandoffToolCall,
@@ -57,8 +57,8 @@ import {
   type TelegramRuntimeHealth,
 } from "./runtime-token.js";
 import { loadStartupConfig, resolveCompatibleConfig } from "./config-compat.js";
-import { isChoiceCallback, resolveChoiceCallback } from "./workflow-choice.js";
 import { applyDecisionCallback, isDecisionCallback } from "./decisions.js";
+import { isAgentPickCallback } from "./agent-picker.js";
 
 type TelegramConfig = {
   telegramBotTokenRef: string;
@@ -1638,19 +1638,14 @@ async function handleCallbackQuery(
     return;
   }
 
-  // A workflow `choice` step is parked waiting on this press. Resolve it first
-  // and acknowledge, so the spinner on the button clears immediately.
-  if (isChoiceCallback(data)) {
-    const resolved = resolveChoiceCallback(data);
-    await answerCallbackQuery(
-      ctx,
-      token,
-      query.id,
-      resolved ? "Got it" : "That choice has expired",
-    );
-    if (!resolved) {
-      ctx.logger.info("Choice callback had no pending workflow", { actor });
-    }
+  // /choose completion. Stateless for the same reason decisions are: the
+  // update loop is sequential, so the sending handler cannot wait for this.
+  if (isAgentPickCallback(data) && chatId) {
+    const companyId = await resolveCallbackCompanyId(ctx, query);
+    const result = companyId
+      ? await completeAgentPick(ctx, token, data, companyId, baseUrl)
+      : { ok: false, message: "This chat is not linked to a company" };
+    await answerCallbackQuery(ctx, token, query.id, result.ok ? `Assigned to ${result.message}` : result.message);
     return;
   }
 

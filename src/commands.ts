@@ -1,7 +1,13 @@
 import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { METRIC_NAMES } from "./constants.js";
-import { askChoice } from "./workflow-choice.js";
+import {
+  buildAgentPickCallback,
+  newPickKey,
+  parseAgentPickCallback,
+  savePendingPick,
+  takePendingPick,
+} from "./agent-picker.js";
 import { fetchOpenDecisions, sendDecisionList } from "./decisions.js";
 import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
@@ -105,6 +111,76 @@ function isExternalUrl(url?: string): boolean {
 }
 
 /**
+ * Finish a /choose after the user taps an agent. Runs from the callback
+ * handler on a later update, which is the only way this can work — see
+ * agent-picker.ts for why nothing may be awaited at send time.
+ */
+export async function completeAgentPick(
+  ctx: PluginContext,
+  token: string,
+  data: string,
+  companyId: string,
+  linkBaseUrl?: string,
+): Promise<{ ok: boolean; message: string }> {
+  const parsed = parseAgentPickCallback(data);
+  if (!parsed) return { ok: false, message: "Unrecognised button" };
+
+  const pending = await takePendingPick(ctx, companyId, parsed.pickKey);
+  if (!pending) return { ok: false, message: "That pick has expired" };
+
+  const agentId = pending.agentIds[parsed.agentIndex];
+  if (!agentId) return { ok: false, message: "That agent is no longer listed" };
+
+  let agents: Agent[];
+  try {
+    agents = await ctx.agents.list({ companyId });
+  } catch {
+    return { ok: false, message: "Could not load agents" };
+  }
+  const agent = agents.find((a: Agent) => a.id === agentId);
+  if (!agent) return { ok: false, message: "That agent no longer exists" };
+
+  if (!pending.title) {
+    await sendMessage(
+      ctx,
+      token,
+      pending.chatId,
+      `${agent.name} — ${agent.status}\nSend /choose <task> to assign work to them.`,
+      { messageThreadId: pending.messageThreadId },
+    );
+    return { ok: true, message: agent.name };
+  }
+
+  try {
+    const company = await ctx.companies.get(companyId);
+    const issuePrefix = company?.issuePrefix;
+    const projectId = await resolveProjectIdForTopic(ctx, pending.chatId, companyId, pending.messageThreadId);
+
+    // Create unassigned, then assign: issue_assigned only fires on a
+    // null -> agent transition, so assigning at creation leaves the agent asleep.
+    let issue = await ctx.issues.create({ companyId, title: pending.title, ...(projectId ? { projectId } : {}) });
+    issue = await ctx.issues.update(issue.id, { status: "todo", assigneeAgentId: agent.id }, companyId);
+
+    const id = issue.identifier ?? issue.id;
+    const hasLink = linkBaseUrl && isExternalUrl(linkBaseUrl) && issuePrefix;
+    const idText = hasLink
+      ? `[${escapeMarkdownV2(id)}](${linkBaseUrl}/${issuePrefix}/issues/${id})`
+      : `\`${escapeMarkdownV2(id)}\``;
+
+    await sendMessage(
+      ctx,
+      token,
+      pending.chatId,
+      `${escapeMarkdownV2("✅")} *Task created*: ${idText} ${escapeMarkdownV2("→")} *${escapeMarkdownV2(agent.name)}*\n${escapeMarkdownV2(pending.title)}`,
+      { parseMode: "MarkdownV2", messageThreadId: pending.messageThreadId },
+    );
+    return { ok: true, message: agent.name };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * /decisions — what is actually waiting on a human, from the decision queue
  * behind the /<company>/decisions page.
  *
@@ -184,66 +260,30 @@ async function handleChoose(
   }
 
   const statusEmoji: Record<string, string> = { running: "🔵", idle: "⚪" };
-  const chosenId = await askChoice(
-    ctx,
-    token,
+
+  // Nothing is awaited here: updates are processed sequentially, so waiting for
+  // the press would block the loop that delivers it. The pick is parked in
+  // state and finished by the callback handler on a later update.
+  const pickKey = newPickKey(Date.now());
+  await savePendingPick(ctx, companyId, pickKey, {
     chatId,
-    title ? `Who should take: ${title}` : "Pick an agent",
-    selectable.map((agent: Agent) => ({
-      label: `${statusEmoji[agent.status] ?? "⚪"} ${agent.name}`,
-      value: agent.id,
-    })),
-    { messageThreadId, columns: 2 },
-  );
+    title,
+    agentIds: selectable.map((a: Agent) => a.id),
+    messageThreadId,
+    createdAt: Date.now(),
+  });
 
-  if (!chosenId) return; // askChoice already reported the timeout
-  const agent = selectable.find((a: Agent) => a.id === chosenId);
-  if (!agent) return;
+  const buttons = selectable.map((agent: Agent, index: number) => ({
+    text: `${statusEmoji[agent.status] ?? "⚪"} ${agent.name}`.slice(0, 64),
+    callback_data: buildAgentPickCallback(pickKey, index),
+  }));
+  const inlineKeyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+  for (let i = 0; i < buttons.length; i += 2) inlineKeyboard.push(buttons.slice(i, i + 2));
 
-  if (!title) {
-    await sendMessage(
-      ctx,
-      token,
-      chatId,
-      `${escapeMarkdownV2(statusEmoji[agent.status] ?? "⚪")} *${escapeMarkdownV2(agent.name)}* ${escapeMarkdownV2("—")} ${escapeMarkdownV2(agent.status)}\n${escapeMarkdownV2("Send /choose <task> to assign work to them.")}`,
-      { parseMode: "MarkdownV2", messageThreadId },
-    );
-    return;
-  }
-
-  try {
-    const company = await ctx.companies.get(companyId);
-    const issuePrefix = company?.issuePrefix;
-    const projectId = await resolveProjectIdForTopic(ctx, chatId, companyId, messageThreadId);
-
-    // Same ordering as /create, and for the same reason: the issue_assigned
-    // wake only fires when the assignee transitions from null to an agent, so
-    // assigning at creation time would leave the agent asleep.
-    let issue = await ctx.issues.create({ companyId, title, ...(projectId ? { projectId } : {}) });
-    issue = await ctx.issues.update(issue.id, { status: "todo", assigneeAgentId: agent.id }, companyId);
-
-    const id = issue.identifier ?? issue.id;
-    const hasLink = linkBaseUrl && isExternalUrl(linkBaseUrl) && issuePrefix;
-    const idText = hasLink
-      ? `[${escapeMarkdownV2(id)}](${linkBaseUrl}/${issuePrefix}/issues/${id})`
-      : `\`${escapeMarkdownV2(id)}\``;
-
-    await sendMessage(
-      ctx,
-      token,
-      chatId,
-      `${escapeMarkdownV2("✅")} *Task created*: ${idText} ${escapeMarkdownV2("→")} *${escapeMarkdownV2(agent.name)}*\n${escapeMarkdownV2(title)}`,
-      { parseMode: "MarkdownV2", messageThreadId },
-    );
-  } catch (err) {
-    await sendMessage(
-      ctx,
-      token,
-      chatId,
-      `Failed to assign task: ${err instanceof Error ? err.message : String(err)}`,
-      { messageThreadId },
-    );
-  }
+  await sendMessage(ctx, token, chatId, title ? `Who should take: ${title}` : "Pick an agent", {
+    messageThreadId,
+    inlineKeyboard,
+  });
 }
 
 async function handleStatus(
