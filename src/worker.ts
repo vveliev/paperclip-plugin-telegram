@@ -479,7 +479,13 @@ async function resolveCallbackCompanyId(
  * reconciliation), so handlers must dedupe to avoid sending the same
  * Telegram message twice.
  */
-function makeUpdateDedupe(windowMs = 5_000, maxEntries = 500) {
+/*
+ * The helpers below are exported for tests, not for callers. They are the
+ * decision logic of the worker — which updates are duplicates, when a digest
+ * fires, whether a topic id is usable — and all of it was unreachable from a
+ * test while it was module-private, which is why worker.ts sat at 33%.
+ */
+export function makeUpdateDedupe(windowMs = 5_000, maxEntries = 500) {
   const seen = new Map<string, number>();
   return (key: string): boolean => {
     const now = Date.now();
@@ -496,14 +502,14 @@ function makeUpdateDedupe(windowMs = 5_000, maxEntries = 500) {
   };
 }
 
-function normalizeAgentErrorMessage(input: unknown): string {
+export function normalizeAgentErrorMessage(input: unknown): string {
   return String(input ?? "Unknown error")
     .trim()
     .replace(/\s+/g, " ")
     .slice(0, 500);
 }
 
-async function resolveChat(
+export async function resolveChat(
   ctx: PluginContext,
   companyId: string,
   fallback: string,
@@ -516,14 +522,14 @@ async function resolveChat(
   return (override as string) ?? fallback ?? null;
 }
 
-function parseTopicId(value?: string): number | undefined {
+export function parseTopicId(value?: string): number | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
   if (!/^\d+$/.test(trimmed)) return undefined;
   return Number(trimmed);
 }
 
-function validateConfiguredTopicIds(config: Record<string, unknown>): string[] {
+export function validateConfiguredTopicIds(config: Record<string, unknown>): string[] {
   const errors: string[] = [];
   for (const key of ["approvalsTopicId", "errorsTopicId", "digestTopicId"]) {
     const value = config[key];
@@ -535,7 +541,7 @@ function validateConfiguredTopicIds(config: Record<string, unknown>): string[] {
   return errors;
 }
 
-async function resolveDigestThreadId(
+export async function resolveDigestThreadId(
   ctx: PluginContext,
   token: string,
   chatId: string,
@@ -546,13 +552,13 @@ async function resolveDigestThreadId(
   return await isForum(ctx, token, chatId) ? GENERAL_TOPIC_THREAD_ID : undefined;
 }
 
-function resolveDigestMode(config: TelegramConfig): TelegramConfig["digestMode"] {
+export function resolveDigestMode(config: TelegramConfig): TelegramConfig["digestMode"] {
   return (config as Record<string, unknown>).dailyDigestEnabled === true && config.digestMode === "off"
     ? "daily"
     : config.digestMode ?? "off";
 }
 
-function parseDigestTime(value: string | undefined): { hour: number; minute: number } | null {
+export function parseDigestTime(value: string | undefined): { hour: number; minute: number } | null {
   const trimmed = value?.trim();
   if (!trimmed) return null;
   const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(trimmed);
@@ -564,7 +570,7 @@ function parseDigestTime(value: string | undefined): { hour: number; minute: num
   return { hour, minute };
 }
 
-function digestTimesForConfig(config: TelegramConfig): Array<{ hour: number; minute: number }> {
+export function digestTimesForConfig(config: TelegramConfig): Array<{ hour: number; minute: number }> {
   const mode = resolveDigestMode(config);
   if (mode === "off") return [];
   if (mode === "daily") {
@@ -580,7 +586,7 @@ function digestTimesForConfig(config: TelegramConfig): Array<{ hour: number; min
     .filter((time): time is { hour: number; minute: number } => Boolean(time));
 }
 
-function resolveDigestSlot(
+export function resolveDigestSlot(
   config: TelegramConfig,
   date: Date,
 ): { dateKey: string; timeKey: string } | null {

@@ -23,15 +23,17 @@ export default defineConfig({
        * currently achieves, so the build fails when coverage DROPS — the
        * failure mode worth catching is a change that quietly ships untested.
        *
-       * The global number is still held down by `worker.ts` (33%) and
-       * `acp-bridge.ts` (71%), both large and still filling in. Raise these
-       * as that changes; do not lower them to make a red build green.
+       * The global number is still held down by `worker.ts` (41%), whose
+       * remaining gap is almost entirely the body of setup() — handler and
+       * job registration that needs a fuller host harness than the decision
+       * helpers did. Raise these as that changes; do not lower them to make a
+       * red build green.
        */
       thresholds: {
-        statements: 69,
-        branches: 76,
-        functions: 86,
-        lines: 69,
+        statements: 72,
+        branches: 77,
+        functions: 92,
+        lines: 72,
 
         // Modules where a regression is a user-visible failure, held higher.
         "src/decisions.ts": { statements: 98, functions: 100 },
