@@ -121,7 +121,7 @@ function approvalStateKey(approvalId: string): string {
 // --- Built-in commands ---
 
 const BUILTIN_COMMANDS = new Set([
-  "status", "issues", "agents", "approve", "help",
+  "status", "issues", "agents", "approve", "help", "settings",
   "connect", "connect_topic", "topics", "acp", "commands",
 ]);
 
