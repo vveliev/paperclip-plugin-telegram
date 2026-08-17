@@ -26,7 +26,7 @@ import {
   formatAgentRunFinished,
   type IssueLinksOpts,
 } from "./formatters.js";
-import { handleCommand, completeAgentPick, resolveNotificationThreadId, BOT_COMMANDS } from "./commands.js";
+import { handleCommand, resolveNotificationThreadId, BOT_COMMANDS } from "./commands.js";
 import {
   routeMessageToAgent,
   handleHandoffToolCall,
@@ -58,7 +58,6 @@ import {
 } from "./runtime-token.js";
 import { loadStartupConfig, resolveCompatibleConfig } from "./config-compat.js";
 import { applyDecisionCallback, isDecisionCallback } from "./decisions.js";
-import { isAgentPickCallback } from "./agent-picker.js";
 
 type TelegramConfig = {
   telegramBotTokenRef: string;
@@ -1635,17 +1634,6 @@ async function handleCallbackQuery(
     if (result.ok && messageId) {
       await editMessage(ctx, token, chatId, messageId, `${originalMessageText}\n\n✅ ${result.message} — ${actor}`);
     }
-    return;
-  }
-
-  // /choose completion. Stateless for the same reason decisions are: the
-  // update loop is sequential, so the sending handler cannot wait for this.
-  if (isAgentPickCallback(data) && chatId) {
-    const companyId = await resolveCallbackCompanyId(ctx, query);
-    const result = companyId
-      ? await completeAgentPick(ctx, token, data, companyId, baseUrl)
-      : { ok: false, message: "This chat is not linked to a company" };
-    await answerCallbackQuery(ctx, token, query.id, result.ok ? `Assigned to ${result.message}` : result.message);
     return;
   }
 
