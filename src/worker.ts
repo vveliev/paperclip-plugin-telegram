@@ -677,7 +677,10 @@ async function resolveCompanyIdOrNull(ctx: PluginContext, chatId: string): Promi
   }
 }
 
-const plugin = definePlugin({
+// Exported so tests can drive `setup()` (the polling loop, event-subscription
+// handlers, digest/escalation/watch job registration) through a fake
+// PluginContext — none of that closure is otherwise reachable from a test.
+export const plugin = definePlugin({
   async setup(ctx) {
     // Resolve the company BEFORE loading config. An unscoped ctx.config.get()
     // fails from setup() on scope-enforcing hosts, and the silent fallback to
