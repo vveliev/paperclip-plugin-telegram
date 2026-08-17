@@ -504,13 +504,35 @@ describe("resolveNotificationThreadId", () => {
 describe("BOT_COMMANDS", () => {
   it("has all expected commands", () => {
     const names = BOT_COMMANDS.map(c => c.command);
+    expect(names).toContain("create");
     expect(names).toContain("status");
     expect(names).toContain("issues");
     expect(names).toContain("agents");
     expect(names).toContain("approve");
     expect(names).toContain("help");
+    expect(names).toContain("acp");
+    expect(names).toContain("commands");
     expect(names).toContain("connect");
     expect(names).toContain("connect_topic");
     expect(names).toContain("topics");
+  });
+
+  it("does not list /choose — reverted, it duplicated /create and bypassed the org's routing", () => {
+    const names = BOT_COMMANDS.map(c => c.command);
+    expect(names).not.toContain("choose");
+  });
+
+  it("leads with daily-use commands, trailing forum-only and one-time setup commands", () => {
+    const names = BOT_COMMANDS.map(c => c.command);
+    const dailyUse = ["create", "status", "issues", "agents", "approve"];
+    const setupOrForumOnly = ["connect", "connect_topic", "topics"];
+    const lastDailyUseIndex = Math.max(...dailyUse.map(c => names.indexOf(c)));
+    const firstSetupIndex = Math.min(...setupOrForumOnly.map(c => names.indexOf(c)));
+    expect(lastDailyUseIndex).toBeLessThan(firstSetupIndex);
+  });
+
+  it("gives every command a unique name — Telegram's setMyCommands rejects duplicates", () => {
+    const names = BOT_COMMANDS.map(c => c.command);
+    expect(new Set(names).size).toBe(names.length);
   });
 });
