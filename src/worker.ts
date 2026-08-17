@@ -266,9 +266,9 @@ function getBoardAccessRegistration(
  * /help would be wasteful — the cost of that optimisation is this coupling, so
  * it is asserted in tests.
  */
-const BOARD_TOKEN_COMMANDS = new Set(["approve", "decisions"]);
+export const BOARD_TOKEN_COMMANDS = new Set(["approve", "decisions"]);
 
-async function resolveBoardApiToken(
+export async function resolveBoardApiToken(
   ctx: PluginContext,
   config: TelegramConfig,
   companyId?: string | null,
