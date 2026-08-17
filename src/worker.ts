@@ -406,6 +406,15 @@ export async function resolveCompanyRuntimes(
   const companies = prefetchedCompanies ?? (await listCompaniesForStartup(ctx));
   const runtimes: TelegramCompanyRuntime[] = [];
 
+  // Every `continue` below means "this company will not be polled". When they
+  // were silent, a startup that polled nothing was indistinguishable from a
+  // startup with nothing to poll, and diagnosing the difference meant reading
+  // the database. Each skip now records which of the six gates closed.
+  const skipped: Array<{ companyId: string; reason: string }> = [];
+  const skip = (companyId: string, reason: string) => {
+    skipped.push({ companyId, reason });
+  };
+
   for (const company of companies) {
     let scopedConfig: Record<string, unknown>;
     try {
@@ -415,9 +424,13 @@ export async function resolveCompanyRuntimes(
         companyId: company.id,
         error: String(err),
       });
+      skip(company.id, `config.get failed: ${String(err)}`);
       continue;
     }
-    if (!("telegramBotTokenRef" in scopedConfig)) continue;
+    if (!("telegramBotTokenRef" in scopedConfig)) {
+      skip(company.id, "scoped config has no telegramBotTokenRef — the plugin config was never saved for this company");
+      continue;
+    }
 
     const effectiveConfig = { ...startupConfig, ...scopedConfig } as unknown as TelegramConfig;
     const hasCompanyTelegramRoute = [
@@ -447,15 +460,27 @@ export async function resolveCompanyRuntimes(
     // The inversion is what makes it vicious: polling only survives when the
     // startup config load FAILS and leaves defaults to differ from.
     const isStartupConfigCompany = Boolean(startupConfigCompanyId) && company.id === startupConfigCompanyId;
-    if (!isStartupConfigCompany && !hasCompanyTelegramRoute) continue;
+    if (!isStartupConfigCompany && !hasCompanyTelegramRoute) {
+      skip(company.id, "scoped config defines no Telegram route distinct from the instance config");
+      continue;
+    }
 
-    if (!predicate(effectiveConfig)) continue;
+    if (!predicate(effectiveConfig)) {
+      skip(company.id, "enableCommands and enableInbound are both off");
+      continue;
+    }
 
     const tokenRef = effectiveConfig.telegramBotTokenRef;
-    if (!tokenRef) continue;
+    if (!tokenRef) {
+      skip(company.id, "telegramBotTokenRef is present but empty");
+      continue;
+    }
 
     const token = await resolveTelegramBotTokenRef(ctx, tokenRef, company.id);
-    if (!token) continue;
+    if (!token) {
+      skip(company.id, "telegramBotTokenRef did not resolve — the secret needs a binding, which is only created when plugin config is saved");
+      continue;
+    }
 
     const baseUrl = effectiveConfig.paperclipBaseUrl || startupConfig.paperclipBaseUrl || "http://localhost:3100";
     const publicUrl = effectiveConfig.paperclipPublicUrl || baseUrl;
@@ -465,6 +490,15 @@ export async function resolveCompanyRuntimes(
       token,
       baseUrl,
       publicUrl,
+    });
+  }
+
+  // Report the reasons when the result is nothing, which is the only case where
+  // anyone needs them and the case that used to be undiagnosable.
+  if (runtimes.length === 0 && skipped.length > 0) {
+    ctx.logger.warn("No Telegram runtime was built for any company", {
+      companies: companies.length,
+      skipped,
     });
   }
 
