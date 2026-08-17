@@ -42,7 +42,12 @@ import {
   processTelegramUpdateBatch,
 } from "./polling-offset.js";
 import { getTelegramUpdateChatId, selectTelegramRuntimeForUpdate } from "./polling-dispatch.js";
-import { handleCommandsCommand, tryCustomCommand } from "./command-registry.js";
+import {
+  handleCommandsCommand,
+  tryCustomCommand,
+  isWorkflowApprovalCallback,
+  resolveWorkflowApprovalCallback,
+} from "./command-registry.js";
 import { handleRegisterWatch, checkWatches } from "./watch-registry.js";
 import {
   isInteractionAnswerCallback,
@@ -1761,6 +1766,14 @@ async function handleCallbackQuery(
 
   if (isInteractionAnswerCallback(data)) {
     await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
+    return;
+  }
+
+  // Must precede the "approve_" branch below only by intent, not by necessity:
+  // these are "cmd_approve_"/"cmd_reject_" and cannot collide with it. Kept
+  // adjacent so the two approval flows are read together.
+  if (isWorkflowApprovalCallback(data)) {
+    await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
     return;
   }
 
