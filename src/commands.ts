@@ -63,6 +63,11 @@ export async function handleCommand(
     case "approve":
       await handleApprove(ctx, token, chatId, args, messageThreadId, baseUrl, boardApiToken);
       break;
+    // /start is Telegram's own entry point — the button the client shows on
+    // every new chat, so it is the first thing a user ever sends. With no case
+    // here it fell through to "Unknown command: /start", which is the worst
+    // possible first impression. Answer it with the command list.
+    case "start":
     case "help":
       await handleHelp(ctx, token, chatId, messageThreadId);
       break;
