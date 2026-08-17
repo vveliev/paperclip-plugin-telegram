@@ -41,7 +41,7 @@ export default defineConfig({
         "src/telegram-api.ts": { statements: 88, functions: 88 },
         "src/secret-ref-validation.ts": { statements: 100, functions: 100 },
         "src/allowlist.ts": { statements: 100, functions: 100 },
-        "src/acp-bridge.ts": { statements: 70, functions: 80 },
+        "src/acp-bridge.ts": { statements: 75, functions: 90 },
         "src/adapter.ts": { statements: 100, functions: 100 },
       },
     },
