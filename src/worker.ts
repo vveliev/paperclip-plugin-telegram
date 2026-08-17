@@ -316,7 +316,7 @@ type TelegramPollingRuntimeGroup = {
  * not callable from setup(). Falls back to the company id recorded in the
  * board-access state, which is written when board access is connected.
  */
-async function listCompaniesForStartup(ctx: PluginContext): Promise<Array<{ id: string }>> {
+export async function listCompaniesForStartup(ctx: PluginContext): Promise<Array<{ id: string }>> {
   let listed: Array<{ id: string }> = [];
   let listError: unknown = null;
   try {
@@ -352,7 +352,7 @@ async function listCompaniesForStartup(ctx: PluginContext): Promise<Array<{ id: 
   return [{ id: fallbackCompanyId }];
 }
 
-async function resolveCompanyRuntimes(
+export async function resolveCompanyRuntimes(
   ctx: PluginContext,
   startupConfig: TelegramConfig,
   predicate: (config: TelegramConfig) => boolean,
