@@ -326,6 +326,71 @@ describe("handleUpdate - callback query dispatch", () => {
   });
 });
 
+describe("handleUpdate - wait_approval callback resolution (BLA-156)", () => {
+  function statefulCtx(initialState: Record<string, unknown> = {}): PluginContext {
+    const store: Record<string, unknown> = { ...initialState };
+    return {
+      http: { fetch: vi.fn().mockResolvedValue({ json: () => Promise.resolve({ ok: true }) }) },
+      metrics: { write: vi.fn().mockResolvedValue(undefined) },
+      state: {
+        get: vi.fn(async (key: { stateKey: string }) => store[key.stateKey] ?? null),
+        set: vi.fn(async (key: { stateKey: string }, value: unknown) => {
+          store[key.stateKey] = value;
+        }),
+      },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      companies: { get: vi.fn().mockResolvedValue(null) },
+      projects: { list: vi.fn().mockResolvedValue([]) },
+      agents: { list: vi.fn().mockResolvedValue([]) },
+      issues: { list: vi.fn().mockResolvedValue([]) },
+      secrets: { resolve: vi.fn().mockResolvedValue("secret") },
+    } as unknown as PluginContext;
+  }
+
+  function callbackUpdate(data: string, updateId: number) {
+    return {
+      update_id: updateId,
+      callback_query: {
+        id: `cb-${updateId}`,
+        from: { id: 42, username: "alice" },
+        message: { message_id: 55, chat: { id: LINKED_CHAT_ID }, text: "Ship v2?" },
+        data,
+      },
+    } as Parameters<typeof handleUpdate>[3];
+  }
+
+  it("approves a pending wait_approval and edits the message, without calling the board API", async () => {
+    const ctx = statefulCtx({ cmd_approval_wf1: { status: "pending", createdAt: 1 } });
+    await handleUpdate(ctx, "token", config, callbackUpdate("cmd_approve_wf1", 20), baseUrl);
+
+    expect(answeredCallbacks.some((a) => a.text === "Approved")).toBe(true);
+    expect(editedMessages.some((m) => m.text.includes("Approved"))).toBe(true);
+    expect(fetchCalls.some((c) => c.url.includes("/api/approvals/"))).toBe(false);
+  });
+
+  it("rejects a pending wait_approval", async () => {
+    const ctx = statefulCtx({ cmd_approval_wf2: { status: "pending", createdAt: 1 } });
+    await handleUpdate(ctx, "token", config, callbackUpdate("cmd_reject_wf2", 21), baseUrl);
+
+    expect(answeredCallbacks.some((a) => a.text === "Rejected")).toBe(true);
+  });
+
+  it("answers 'Already handled' on a double-tap instead of re-editing the message", async () => {
+    const ctx = statefulCtx({ cmd_approval_wf3: { status: "approved", createdAt: 1 } });
+    await handleUpdate(ctx, "token", config, callbackUpdate("cmd_approve_wf3", 22), baseUrl);
+
+    expect(answeredCallbacks.some((a) => a.text === "Already handled")).toBe(true);
+    expect(editedMessages).toHaveLength(0);
+  });
+
+  it("answers 'Already handled' when nothing was ever parked (expired or unknown id)", async () => {
+    const ctx = statefulCtx();
+    await handleUpdate(ctx, "token", config, callbackUpdate("cmd_approve_missing", 23), baseUrl);
+
+    expect(answeredCallbacks.some((a) => a.text === "Already handled")).toBe(true);
+  });
+});
+
 describe("handleUpdate - allowlist enforcement (regression: blocked updates must not reach any handler)", () => {
   it("drops a message from a chat outside the allowlist without dispatching a command", async () => {
     const ctx = mockCtx();

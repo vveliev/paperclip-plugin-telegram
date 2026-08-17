@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { handleCommandsCommand, tryCustomCommand } from "../src/command-registry.js";
+import {
+  handleCommandsCommand,
+  tryCustomCommand,
+  isWorkflowApprovalCallback,
+  resolveWorkflowApprovalCallback,
+} from "../src/command-registry.js";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 let sentMessages: Array<{ chatId: string; text: string; options?: Record<string, unknown> }> = [];
@@ -233,6 +238,68 @@ describe("Workflow step template interpolation", () => {
     const ctx = mockCtx();
     await tryCustomCommand(ctx, "token", "123", "multi", "", undefined, "co-1");
     expect(sentMessages.some(m => m.text === "first said: sent")).toBe(true);
+  });
+});
+
+describe("wait_approval step and callback resolution (BLA-156)", () => {
+  it("parks a pending approval and returns without blocking the workflow", async () => {
+    stateStore["commands_co-1"] = [{
+      name: "ship",
+      description: "Ship it",
+      steps: [{ id: "s1", type: "wait_approval", prompt: "Ship {{arg0}}?" }],
+      createdBy: "test",
+      createdAt: "2026-01-01",
+    }];
+    const ctx = mockCtx();
+    const result = await tryCustomCommand(ctx, "token", "123", "ship", "v2", undefined, "co-1");
+
+    expect(result).toBe(true);
+    const sent = sentMessages.find((m) => m.text === "Ship v2?");
+    expect(sent).toBeDefined();
+
+    const buttons = (sent!.options as { inlineKeyboard: Array<Array<{ text: string; callback_data: string }>> })
+      .inlineKeyboard[0]!;
+    expect(buttons[0]!.text).toBe("Approve");
+    expect(buttons[0]!.callback_data).toMatch(/^cmd_approve_/);
+    expect(buttons[1]!.callback_data).toMatch(/^cmd_reject_/);
+
+    const approvalId = buttons[0]!.callback_data.replace("cmd_approve_", "");
+    expect(stateStore[`cmd_approval_${approvalId}`]).toMatchObject({ status: "pending" });
+  });
+
+  it("resolves an approve callback exactly once", async () => {
+    stateStore["cmd_approval_abc"] = { status: "pending", createdAt: 1 };
+    const ctx = mockCtx();
+
+    const first = await resolveWorkflowApprovalCallback(ctx, "cmd_approve_abc");
+    expect(first).toBe("approved");
+    expect(stateStore["cmd_approval_abc"]).toMatchObject({ status: "approved" });
+
+    // A redelivered or double-tapped callback must not re-approve.
+    const second = await resolveWorkflowApprovalCallback(ctx, "cmd_approve_abc");
+    expect(second).toBeNull();
+  });
+
+  it("resolves a reject callback", async () => {
+    stateStore["cmd_approval_xyz"] = { status: "pending", createdAt: 1 };
+    const ctx = mockCtx();
+
+    const decision = await resolveWorkflowApprovalCallback(ctx, "cmd_reject_xyz");
+    expect(decision).toBe("rejected");
+    expect(stateStore["cmd_approval_xyz"]).toMatchObject({ status: "rejected" });
+  });
+
+  it("returns null when nothing is parked for the id (expired state, unknown id)", async () => {
+    const ctx = mockCtx();
+    const decision = await resolveWorkflowApprovalCallback(ctx, "cmd_approve_missing");
+    expect(decision).toBeNull();
+  });
+
+  it("isWorkflowApprovalCallback matches only cmd_approve_/cmd_reject_ data", () => {
+    expect(isWorkflowApprovalCallback("cmd_approve_1")).toBe(true);
+    expect(isWorkflowApprovalCallback("cmd_reject_1")).toBe(true);
+    expect(isWorkflowApprovalCallback("int_abc")).toBe(false);
+    expect(isWorkflowApprovalCallback("approve_1")).toBe(false);
   });
 });
 

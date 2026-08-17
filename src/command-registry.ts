@@ -347,6 +347,45 @@ async function executeWorkflow(
   ctx.logger.info("Workflow completed", { command: cmd.name, steps: results.length });
 }
 
+// --- wait_approval callback resolution ---
+//
+// Mirrors the /decisions and interaction-answers.ts shape: `wait_approval`
+// above only parks a pending record and returns, so this resolves it from a
+// callback_query on a later update instead of anything the step itself awaits.
+
+let approvalCounter = 0;
+function nextApprovalId(): string {
+  approvalCounter = (approvalCounter + 1) % 100000;
+  return `${Date.now().toString(36)}${approvalCounter.toString(36)}`;
+}
+
+function approvalStateKey(approvalId: string) {
+  return { scopeKind: "instance" as const, stateKey: `cmd_approval_${approvalId}` };
+}
+
+export function isWorkflowApprovalCallback(data: string): boolean {
+  return data.startsWith("cmd_approve_") || data.startsWith("cmd_reject_");
+}
+
+/**
+ * Record an approve/reject button press. Returns the decision so the caller
+ * can answer the callback and edit the message, or null when there was
+ * nothing pending — already decided, or a redelivered/expired callback.
+ */
+export async function resolveWorkflowApprovalCallback(
+  ctx: PluginContext,
+  data: string,
+): Promise<"approved" | "rejected" | null> {
+  if (!isWorkflowApprovalCallback(data)) return null;
+  const decision = data.startsWith("cmd_approve_") ? "approved" : "rejected";
+  const approvalId = data.slice(data.indexOf("_", 4) + 1);
+  const key = approvalStateKey(approvalId);
+  const existing = (await ctx.state.get(key)) as { status?: string } | null;
+  if (!existing || existing.status !== "pending") return null;
+  await ctx.state.set(key, { status: decision, decidedAt: Date.now() });
+  return decision;
+}
+
 async function executeStep(
   ctx: PluginContext,
   token: string,
@@ -430,7 +469,7 @@ async function executeStep(
 
     case "wait_approval": {
       const prompt = interpolate(step.prompt);
-      const approvalId = `cmd_approval_${Date.now()}`;
+      const approvalId = nextApprovalId();
       await sendMessage(ctx, token, chatId, prompt, {
         messageThreadId,
         inlineKeyboard: [
@@ -440,11 +479,10 @@ async function executeStep(
           ],
         ],
       });
-      // Store approval state - workflow will be continued by callback handler
-      await ctx.state.set(
-        { scopeKind: "instance", stateKey: `cmd_approval_${approvalId}` },
-        { status: "pending", createdAt: Date.now() },
-      );
+      // Park the decision in state and return immediately — nothing here
+      // awaits the button press. worker.ts's callback handler resolves this
+      // record from a later update (BLA-156); see resolveWorkflowApprovalCallback.
+      await ctx.state.set(approvalStateKey(approvalId), { status: "pending", createdAt: Date.now() });
       return "awaiting_approval";
     }
 
@@ -453,13 +491,21 @@ async function executeStep(
     // A step that asks the user to pick and waits for the answer cannot work
     // here: updates are processed strictly sequentially, so a workflow that
     // blocks on a button press blocks the loop that would deliver it. The
-    // press can never arrive and the run stalls until it times out.
+    // press can never arrive and the run stalls until it times out. This is
+    // the same defect that shipped and got reverted for /choose
+    // (BLA-150/BLA-153); see interaction-answers.ts for the retrospective.
     //
-    // `wait_approval` has the same defect today — its cmd_approve_* buttons are
-    // handled nowhere, so a workflow reaching it parks forever. Both need the
-    // workflow engine to persist its continuation and resume from a callback,
-    // which does not exist yet. /decisions shows the stateless pattern that
-    // does work: park the context, resolve it in the callback handler.
+    // `wait_approval`, above, follows the pattern that does work: it sends
+    // the buttons and parks a pending record in state without awaiting
+    // anything, so the loop stays free to deliver the button press as its
+    // own later update. worker.ts's callback handler resolves that record.
+    // What this does NOT do is pause the workflow: steps after
+    // `wait_approval` already ran by the time a human can tap a button,
+    // since the step returns "awaiting_approval" immediately instead of
+    // blocking. Making later steps actually wait on the decision needs the
+    // workflow engine to persist a continuation and resume it from a
+    // callback, which does not exist yet — today `wait_approval` is only
+    // meaningful as a workflow's last step.
     case "set_state": {
       const key = interpolate(step.key);
       const value = interpolate(step.value);

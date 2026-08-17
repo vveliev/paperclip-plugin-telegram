@@ -42,7 +42,12 @@ import {
   processTelegramUpdateBatch,
 } from "./polling-offset.js";
 import { getTelegramUpdateChatId, selectTelegramRuntimeForUpdate } from "./polling-dispatch.js";
-import { handleCommandsCommand, tryCustomCommand } from "./command-registry.js";
+import {
+  handleCommandsCommand,
+  tryCustomCommand,
+  isWorkflowApprovalCallback,
+  resolveWorkflowApprovalCallback,
+} from "./command-registry.js";
 import { handleRegisterWatch, checkWatches } from "./watch-registry.js";
 import {
   isInteractionAnswerCallback,
@@ -1662,6 +1667,28 @@ async function handleCallbackQuery(
 
   if (isInteractionAnswerCallback(data)) {
     await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
+    return;
+  }
+
+  if (isWorkflowApprovalCallback(data)) {
+    const decision = await resolveWorkflowApprovalCallback(ctx, data);
+    if (!decision) {
+      await answerCallbackQuery(ctx, token, query.id, "Already handled");
+      return;
+    }
+
+    await answerCallbackQuery(ctx, token, query.id, decision === "approved" ? "Approved" : "Rejected");
+
+    if (chatId && messageId) {
+      const approvalId = data.slice(data.indexOf("_", 4) + 1);
+      await editMessage(
+        ctx,
+        token,
+        chatId,
+        messageId,
+        formatApprovalDecisionMessage(decision, actor, originalMessageText, approvalId),
+      );
+    }
     return;
   }
 
