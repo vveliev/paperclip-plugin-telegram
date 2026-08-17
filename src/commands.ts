@@ -2,6 +2,7 @@ import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@papercl
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { METRIC_NAMES } from "./constants.js";
 import { askChoice } from "./workflow-choice.js";
+import { fetchOpenDecisions, sendDecisionList } from "./decisions.js";
 import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 
@@ -22,6 +23,7 @@ type TopicMap = Record<string, TopicMappingValue>;
 export const BOT_COMMANDS: BotCommand[] = [
   { command: "create", description: "Create a new task (assigned to CEO agent)" },
   { command: "choose", description: "Pick an agent from a list, then assign a task to it" },
+  { command: "decisions", description: "List decisions waiting on your input" },
   { command: "status", description: "Company health: active agents, open issues" },
   { command: "issues", description: "List open issues (optionally by project)" },
   { command: "agents", description: "List agents with current status" },
@@ -55,6 +57,9 @@ export async function handleCommand(
       break;
     case "choose":
       await handleChoose(ctx, token, chatId, args, messageThreadId, publicUrl || baseUrl, companyId);
+      break;
+    case "decisions":
+      await handleDecisions(ctx, token, chatId, messageThreadId, baseUrl, publicUrl, companyId, boardApiToken);
       break;
     case "status":
       await handleStatus(ctx, token, chatId, messageThreadId, publicUrl, companyId);
@@ -97,6 +102,45 @@ export async function handleCommand(
 
 function isExternalUrl(url?: string): boolean {
   return !!url && url.startsWith("https://");
+}
+
+/**
+ * /decisions — what is actually waiting on a human, from the decision queue
+ * behind the /<company>/decisions page.
+ *
+ * Distinct from /approve: an approval is a yes/no on one request, whereas a
+ * decision carries its own option set and applies effects when chosen.
+ */
+async function handleDecisions(
+  ctx: PluginContext,
+  token: string,
+  chatId: string,
+  messageThreadId?: number,
+  baseUrl: string = "http://localhost:3100",
+  publicUrl?: string,
+  resolvedCompanyId?: string,
+  boardApiToken?: string,
+): Promise<void> {
+  await sendChatAction(ctx, token, chatId);
+
+  try {
+    const companyId = resolvedCompanyId ?? (await resolveCompanyId(ctx, chatId));
+    const decisions = await fetchOpenDecisions(ctx, baseUrl, companyId, boardApiToken);
+    await sendDecisionList(ctx, token, chatId, decisions, {
+      messageThreadId,
+      publicUrl: isExternalUrl(publicUrl) ? publicUrl : undefined,
+    });
+  } catch (err) {
+    // Board access is what makes the decision queue readable, so a 401/403
+    // here usually means it was never connected rather than a real outage.
+    await sendMessage(
+      ctx,
+      token,
+      chatId,
+      `Could not load decisions: ${err instanceof Error ? err.message : String(err)}`,
+      { messageThreadId },
+    );
+  }
 }
 
 /**
