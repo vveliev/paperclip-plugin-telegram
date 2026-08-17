@@ -3,6 +3,8 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 import { listCompaniesForStartup, resolveCompanyRuntimes } from "../src/worker.js";
 
+type TelegramConfigLike = { enableCommands?: boolean; enableInbound?: boolean };
+
 let stateStore: Record<string, unknown> = {};
 let configByCompany: Record<string, Record<string, unknown>> = {};
 
@@ -201,5 +203,86 @@ describe("resolveCompanyRuntimes (config merge + company-runtime resolution)", (
 
     const runtimes = await resolveCompanyRuntimes(ctx, startupConfig, () => true);
     expect(runtimes).toEqual([]);
+  });
+});
+
+describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same company)", () => {
+  const companyConfig = {
+    telegramBotTokenRef: { type: "secret_ref", secretId: "s1" },
+    defaultChatId: "-1001234",
+    enableCommands: true,
+  };
+  const wantsCommands = (c: TelegramConfigLike) => Boolean(c.enableCommands);
+
+  it("builds a runtime when startupConfig IS that company's own config", async () => {
+    // The outage. setup() resolves the company first and loads config scoped to
+    // it, so startupConfig and the scoped config are identical. The
+    // "does this company differ from the instance?" guard then finds nothing
+    // different, skips the only company, and long polling never starts — while
+    // startup still logs "Telegram bot plugin started".
+    configByCompany["BLA"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(),
+      { ...companyConfig } as never,
+      wantsCommands as never,
+      [{ id: "BLA" }],
+      "BLA",
+    );
+
+    expect(runtimes).toHaveLength(1);
+    expect(runtimes[0]!.companyId).toBe("BLA");
+    expect(runtimes[0]!.token).toBe("bot-token-123");
+  });
+
+  it("still builds a runtime when the startup config load failed and left defaults", async () => {
+    // The path that accidentally kept polling alive before the fix. It must
+    // keep working, or the fix trades one silent outage for another.
+    configByCompany["BLA"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), {} as never, wantsCommands as never, [{ id: "BLA" }], "BLA",
+    );
+
+    expect(runtimes).toHaveLength(1);
+  });
+
+  it("does not spawn a duplicate runtime for a company that only inherits the instance config", async () => {
+    // Why the diff guard exists: without it every company would produce a
+    // runtime for the same bot and each inbound update would be handled twice.
+    configByCompany["BLA"] = { ...companyConfig };
+    configByCompany["OTHER"] = { ...companyConfig };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), { ...companyConfig } as never, wantsCommands as never,
+      [{ id: "BLA" }, { id: "OTHER" }], "BLA",
+    );
+
+    expect(runtimes.map((r) => r.companyId)).toEqual(["BLA"]);
+  });
+
+  it("builds runtimes for other companies that DO define their own route", async () => {
+    configByCompany["BLA"] = { ...companyConfig };
+    configByCompany["OTHER"] = { ...companyConfig, defaultChatId: "-1009999" };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), { ...companyConfig } as never, wantsCommands as never,
+      [{ id: "BLA" }, { id: "OTHER" }], "BLA",
+    );
+
+    expect(runtimes.map((r) => r.companyId).sort()).toEqual(["BLA", "OTHER"]);
+  });
+
+  it("keeps honouring the predicate for the startup company", async () => {
+    // The exemption is about the config diff only; a company with commands and
+    // inbound both disabled must still not be polled.
+    configByCompany["BLA"] = { ...companyConfig, enableCommands: false };
+
+    const runtimes = await resolveCompanyRuntimes(
+      mockCtx(), { ...companyConfig, enableCommands: false } as never,
+      wantsCommands as never, [{ id: "BLA" }], "BLA",
+    );
+
+    expect(runtimes).toHaveLength(0);
   });
 });
