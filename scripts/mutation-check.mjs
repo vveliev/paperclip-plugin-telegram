@@ -87,6 +87,30 @@ const MUTATIONS = [
     replace: "  const verbs: string[] = [];",
   },
   {
+    id: "approval-gate-not-enforced",
+    file: "src/command-registry.ts",
+    breaks:
+      "A workflow runs straight past its wait_approval gate, executing the very steps the approval exists to hold back. The Approve button becomes decorative.",
+    find: '      if (typeof result === "string" && result.startsWith(AWAITING_APPROVAL_PREFIX)) {',
+    replace: "      if (false) {",
+  },
+  {
+    id: "approval-replayable",
+    file: "src/command-registry.ts",
+    breaks:
+      "The parked continuation is not consumed, so pressing Approve twice runs the rest of the workflow twice.",
+    find: '  await ctx.state.set({ scopeKind: "instance", stateKey }, { ...parked, resolved: true });',
+    replace: "",
+  },
+  {
+    id: "approval-reject-resumes",
+    file: "src/command-registry.ts",
+    breaks:
+      "Rejecting a workflow resumes it anyway — the most dangerous possible reading of a Reject button.",
+    find: "  if (!approved) {",
+    replace: "  if (false) {",
+  },
+  {
     id: "callback-double-answer",
     file: "src/interaction-answers.ts",
     breaks:

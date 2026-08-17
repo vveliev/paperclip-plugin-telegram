@@ -1627,6 +1627,14 @@ async function handleCallbackQuery(
     return;
   }
 
+  // Must precede the "approve_" branch below only by intent, not by necessity:
+  // these are "cmd_approve_"/"cmd_reject_" and cannot collide with it. Kept
+  // adjacent so the two approval flows are read together.
+  if (isWorkflowApprovalCallback(data)) {
+    await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
+    return;
+  }
+
   if (data.startsWith("approve_")) {
     const approvalId = data.replace("approve_", "");
     ctx.logger.info("Approval button clicked", { approvalId, actor });
