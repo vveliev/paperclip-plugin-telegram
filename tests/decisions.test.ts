@@ -23,7 +23,19 @@ vi.mock("../src/paperclip-api.js", () => ({
   }),
 }));
 
-const { fetchPendingInteractions, sendPendingList, renderPendingInteraction, describeKind } =
+const answerableSendCalls: Array<{ chatId: string; interaction: unknown; opts: unknown }> = [];
+vi.mock("../src/interaction-answers.js", () => ({
+  sendAnswerableInteraction: vi.fn(async (_ctx: unknown, _token: string, chatId: string, interaction: unknown, opts: unknown) => {
+    answerableSendCalls.push({ chatId, interaction, opts });
+    return true;
+  }),
+  isAskUserQuestionsAnswerable: (payload: { questions?: Array<{ options?: Array<{ freeText?: boolean }> }> }) =>
+    Array.isArray(payload?.questions) &&
+    payload.questions.length > 0 &&
+    payload.questions.every((q) => (q.options ?? []).every((o) => o.freeText !== true)),
+}));
+
+const { fetchPendingInteractions, sendPendingList, renderPendingInteraction, describeKind, isAnswerableInline } =
   await import("../src/decisions.js");
 
 function makeCtx(issues: Array<{ id: string; identifier?: string }>): PluginContext {
@@ -48,6 +60,7 @@ beforeEach(() => {
   sent.length = 0;
   apiCalls.length = 0;
   interactionsByIssue = {};
+  answerableSendCalls.length = 0;
 });
 
 describe("fetchPendingInteractions", () => {
@@ -132,5 +145,71 @@ describe("describeKind", () => {
     expect(describeKind("ask_user_questions")).toBe("Question");
     expect(describeKind("request_confirmation")).toBe("Confirmation");
     expect(describeKind("some_new_kind")).toBe("some new kind");
+  });
+});
+
+describe("isAnswerableInline", () => {
+  const base = { id: "1", issueId: "i1", kind: "ask_user_questions", title: "Q", status: "pending" };
+
+  it("is true for a pick-only ask_user_questions payload", () => {
+    expect(isAnswerableInline({
+      ...base,
+      payload: { version: 1, questions: [{ id: "q1", prompt: "?", selectionMode: "single", options: [{ id: "o1", label: "A" }] }] },
+    })).toBe(true);
+  });
+
+  it("is false when a question carries a free-text option — that still needs the web UI", () => {
+    expect(isAnswerableInline({
+      ...base,
+      payload: { version: 1, questions: [{ id: "q1", prompt: "?", selectionMode: "single", options: [{ id: "o1", label: "Other", freeText: true }] }] },
+    })).toBe(false);
+  });
+
+  it("is true for a request_confirmation payload with a prompt", () => {
+    expect(isAnswerableInline({ ...base, kind: "request_confirmation", payload: { version: 1, prompt: "Ship it?" } })).toBe(true);
+  });
+
+  it("is false for kinds this module does not know how to answer", () => {
+    expect(isAnswerableInline({ ...base, kind: "suggest_tasks", payload: { version: 1, tasks: [] } })).toBe(false);
+  });
+
+  it("is false when there is no payload at all", () => {
+    expect(isAnswerableInline({ ...base, payload: undefined })).toBe(false);
+  });
+});
+
+describe("sendPendingList — answerable items", () => {
+  it("sends an interactive prompt and omits the web-UI link for an answerable item", async () => {
+    const pending = [{
+      id: "int-1", issueId: "i1", issueIdentifier: "BLA-1", kind: "request_confirmation",
+      title: "Ship it?", summary: null, status: "pending",
+      payload: { version: 1, prompt: "Ship it?" },
+    }];
+
+    await sendPendingList(makeCtx([]), "tok", "chat-1", { pending, scanned: 30 }, {
+      publicUrl: "https://paperclip.example",
+      companyId: "co-1",
+    });
+
+    expect(sent[0]).not.toContain("https://paperclip.example/decisions");
+    expect(answerableSendCalls).toHaveLength(1);
+    expect(answerableSendCalls[0]!.chatId).toBe("chat-1");
+    expect(answerableSendCalls[0]!.opts).toMatchObject({ issueId: "i1", companyId: "co-1" });
+  });
+
+  it("keeps the web-UI link and does not attempt an interactive prompt for an unanswerable item", async () => {
+    const pending = [{
+      id: "int-1", issueId: "i1", issueIdentifier: "BLA-1", kind: "ask_user_questions",
+      title: "Who?", summary: null, status: "pending",
+      payload: { version: 1, questions: [{ id: "q1", prompt: "?", selectionMode: "single", options: [{ id: "o1", label: "Other", freeText: true }] }] },
+    }];
+
+    await sendPendingList(makeCtx([]), "tok", "chat-1", { pending, scanned: 30 }, {
+      publicUrl: "https://paperclip.example",
+      companyId: "co-1",
+    });
+
+    expect(sent[0]).toContain("https://paperclip.example/decisions");
+    expect(answerableSendCalls).toHaveLength(0);
   });
 });

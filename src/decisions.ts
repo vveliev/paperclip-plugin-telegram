@@ -1,6 +1,13 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2 } from "./telegram-api.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
+import {
+  sendAnswerableInteraction,
+  isAskUserQuestionsAnswerable,
+  type AnswerableInteraction,
+  type AskUserQuestionsPayload,
+  type RequestConfirmationPayload,
+} from "./interaction-answers.js";
 
 /**
  * What is actually waiting on a human, as the /<company>/decisions page shows it.
@@ -38,6 +45,7 @@ export type PendingInteraction = {
   title: string;
   summary?: string | null;
   status: string;
+  payload?: unknown;
 };
 
 type RawInteraction = {
@@ -46,7 +54,24 @@ type RawInteraction = {
   status?: string;
   title?: string;
   summary?: string | null;
+  payload?: unknown;
 };
+
+/**
+ * Whether Telegram can answer this item in place, rather than only link to
+ * the web UI. See interaction-answers.ts for why the cut lands here: a pick
+ * fits in buttons, a designer-declared free-text option does not.
+ */
+export function isAnswerableInline(item: PendingInteraction): boolean {
+  if (item.kind === "request_confirmation") {
+    return typeof (item.payload as RequestConfirmationPayload | undefined)?.prompt === "string";
+  }
+  if (item.kind === "ask_user_questions") {
+    const payload = item.payload as AskUserQuestionsPayload | undefined;
+    return Array.isArray(payload?.questions) && isAskUserQuestionsAnswerable(payload!);
+  }
+  return false;
+}
 
 export function isDecisionCallback(data: string): boolean {
   return data.startsWith(CALLBACK_PREFIX);
@@ -116,6 +141,7 @@ export async function fetchPendingInteractions(
           title: interaction.title ?? "(untitled)",
           summary: interaction.summary ?? null,
           status: interaction.status,
+          payload: interaction.payload,
         });
       }
     }
@@ -124,7 +150,11 @@ export async function fetchPendingInteractions(
   return { pending, scanned: issues.length };
 }
 
-export function renderPendingInteraction(item: PendingInteraction, publicUrl?: string): string {
+export function renderPendingInteraction(
+  item: PendingInteraction,
+  publicUrl?: string,
+  opts: { includeAnswerLink?: boolean } = {},
+): string {
   const lines = [
     `${escapeMarkdownV2("🗳")} *${escapeMarkdownV2(item.title)}*`,
     escapeMarkdownV2(`${describeKind(item.kind)} · ${item.issueIdentifier ?? item.issueId}`),
@@ -136,13 +166,25 @@ export function renderPendingInteraction(item: PendingInteraction, publicUrl?: s
     lines.push("", escapeMarkdownV2(excerpt));
   }
 
-  // Answering needs a form (free text, per-question picks), which Telegram
-  // buttons cannot render — so link out rather than pretend to collect it.
-  if (publicUrl && item.issueIdentifier) {
+  // A pick-only question or a confirmation gets an inline answer prompt right
+  // after this message (see sendPendingList) — no link needed. Anything else
+  // (free text, per-question picks Telegram buttons cannot render) still
+  // links out rather than pretending buttons can collect it.
+  if (opts.includeAnswerLink !== false && publicUrl && item.issueIdentifier) {
     lines.push("", escapeMarkdownV2(`Answer: ${publicUrl}/decisions`));
   }
 
   return lines.join("\n");
+}
+
+function toAnswerableInteraction(item: PendingInteraction): AnswerableInteraction | null {
+  if (item.kind === "ask_user_questions") {
+    return { id: item.id, kind: "ask_user_questions", payload: item.payload as AskUserQuestionsPayload };
+  }
+  if (item.kind === "request_confirmation") {
+    return { id: item.id, kind: "request_confirmation", payload: item.payload as RequestConfirmationPayload };
+  }
+  return null;
 }
 
 export async function sendPendingList(
@@ -150,7 +192,7 @@ export async function sendPendingList(
   token: string,
   chatId: string,
   found: { pending: PendingInteraction[]; scanned: number },
-  opts: { messageThreadId?: number; publicUrl?: string; limit?: number } = {},
+  opts: { messageThreadId?: number; publicUrl?: string; limit?: number; companyId?: string } = {},
 ): Promise<void> {
   const { pending, scanned } = found;
 
@@ -167,10 +209,22 @@ export async function sendPendingList(
 
   const limit = opts.limit ?? 5;
   for (const item of pending.slice(0, limit)) {
-    await sendMessage(ctx, token, chatId, renderPendingInteraction(item, opts.publicUrl), {
+    const answerable = isAnswerableInline(item);
+    await sendMessage(ctx, token, chatId, renderPendingInteraction(item, opts.publicUrl, { includeAnswerLink: !answerable }), {
       parseMode: "MarkdownV2",
       messageThreadId: opts.messageThreadId,
     });
+
+    if (answerable) {
+      const interaction = toAnswerableInteraction(item);
+      if (interaction) {
+        await sendAnswerableInteraction(ctx, token, chatId, interaction, {
+          issueId: item.issueId,
+          companyId: opts.companyId,
+          messageThreadId: opts.messageThreadId,
+        });
+      }
+    }
   }
 
   if (pending.length > limit) {

@@ -124,6 +124,7 @@ async function handleDecisions(
     await sendPendingList(ctx, token, chatId, found, {
       messageThreadId,
       publicUrl: isExternalUrl(publicUrl) ? publicUrl : undefined,
+      companyId,
     });
   } catch (err) {
     // Board access is what makes the decision queue readable, so a 401/403
