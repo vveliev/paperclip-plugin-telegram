@@ -286,3 +286,53 @@ describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same com
     expect(runtimes).toHaveLength(0);
   });
 });
+
+describe("resolveCompanyRuntimes diagnostics (BLA-177)", () => {
+  const wantsCommands = (c: TelegramConfigLike) => Boolean(c.enableCommands);
+
+  /** The warn payload emitted when nothing could be polled. */
+  async function skipReasons(config: Record<string, unknown>, secretResolves = true) {
+    configByCompany["BLA"] = config;
+    const ctx = mockCtx();
+    if (!secretResolves) {
+      (ctx.secrets.resolve as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    }
+    const runtimes = await resolveCompanyRuntimes(
+      ctx, {} as never, wantsCommands as never, [{ id: "BLA" }], null,
+    );
+    expect(runtimes).toHaveLength(0);
+    const call = (ctx.logger.warn as ReturnType<typeof vi.fn>).mock.calls
+      .find((c) => String(c[0]).includes("No Telegram runtime was built"));
+    return call?.[1]?.skipped?.[0]?.reason ?? "";
+  }
+
+  it("says when the company config was never saved", async () => {
+    expect(await skipReasons({ defaultChatId: "-100" })).toMatch(/never saved|no telegramBotTokenRef/i);
+  });
+
+  it("says when both inbound switches are off", async () => {
+    const reason = await skipReasons({
+      telegramBotTokenRef: { type: "secret_ref" }, defaultChatId: "-100", enableCommands: false,
+    });
+    expect(reason).toMatch(/both off/i);
+  });
+
+  it("says when the secret has no binding", async () => {
+    const reason = await skipReasons({
+      telegramBotTokenRef: { type: "secret_ref" }, defaultChatId: "-100", enableCommands: true,
+    }, false);
+    expect(reason).toMatch(/binding/i);
+  });
+
+  it("stays quiet when a runtime was built", async () => {
+    configByCompany["BLA"] = {
+      telegramBotTokenRef: { type: "secret_ref" }, defaultChatId: "-100", enableCommands: true,
+    };
+    const ctx = mockCtx();
+    await resolveCompanyRuntimes(ctx, {} as never, wantsCommands as never, [{ id: "BLA" }], null);
+
+    const noisy = (ctx.logger.warn as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c) => String(c[0]).includes("No Telegram runtime was built"));
+    expect(noisy).toHaveLength(0);
+  });
+});
