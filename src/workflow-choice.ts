@@ -15,9 +15,10 @@ import { sendMessage } from "./telegram-api.js";
  * workflow whose earlier steps already had side effects (issues created,
  * agents invoked) is worse than one that clearly gave up.
  *
- * Note `wait_approval` has the same gap and never worked: it emits
- * `cmd_approve_*` buttons that no handler consumes, so the workflow stops at
- * "awaiting_approval" forever. The same registry can fix it.
+ * `wait_approval` used to have the same gap and never worked: it emitted
+ * `cmd_approve_*`/`cmd_reject_*` buttons that no handler consumed, so the
+ * workflow stalled at "awaiting_approval" forever. It now runs through this
+ * same registry as a two-option choice.
  */
 
 type PendingChoice = {

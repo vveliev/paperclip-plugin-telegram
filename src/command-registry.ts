@@ -447,22 +447,27 @@ async function executeStep(
 
     case "wait_approval": {
       const prompt = interpolate(step.prompt);
-      const approvalId = `cmd_approval_${Date.now()}`;
-      await sendMessage(ctx, token, chatId, prompt, {
-        messageThreadId,
-        inlineKeyboard: [
-          [
-            { text: "Approve", callback_data: `cmd_approve_${approvalId}` },
-            { text: "Reject", callback_data: `cmd_reject_${approvalId}` },
-          ],
+      // Approve/Reject is just a two-option choice, so it rides the same
+      // pending-callback registry `choice` uses instead of the old
+      // cmd_approve_*/cmd_reject_* buttons, which nothing ever consumed.
+      const decision = await askChoice(
+        ctx,
+        token,
+        chatId,
+        prompt,
+        [
+          { label: "Approve", value: "approved" },
+          { label: "Reject", value: "rejected" },
         ],
-      });
-      // Store approval state - workflow will be continued by callback handler
-      await ctx.state.set(
-        { scopeKind: "instance", stateKey: `cmd_approval_${approvalId}` },
-        { status: "pending", createdAt: Date.now() },
+        { timeoutMs: step.timeoutMs, messageThreadId },
       );
-      return "awaiting_approval";
+
+      if (decision === null) {
+        await sendMessage(ctx, token, chatId, "No response in time — stopping here.", {
+          messageThreadId,
+        });
+      }
+      return decision;
     }
 
     case "choice": {

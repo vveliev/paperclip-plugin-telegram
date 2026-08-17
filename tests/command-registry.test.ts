@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { handleCommandsCommand, tryCustomCommand } from "../src/command-registry.js";
+import { resolveChoiceCallback } from "../src/workflow-choice.js";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 let sentMessages: Array<{ chatId: string; text: string; options?: Record<string, unknown> }> = [];
@@ -233,6 +234,99 @@ describe("Workflow step template interpolation", () => {
     const ctx = mockCtx();
     await tryCustomCommand(ctx, "token", "123", "multi", "", undefined, "co-1");
     expect(sentMessages.some(m => m.text === "first said: sent")).toBe(true);
+  });
+});
+
+describe("wait_approval step", () => {
+  /**
+   * askChoice awaits sendMessage before registering its pending entry, and
+   * that call is nested a few `await`s deep here (tryCustomCommand ->
+   * executeWorkflow -> executeStep -> askChoice), so drain more microtask
+   * ticks than a direct askChoice call would need.
+   */
+  async function flush(): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      await Promise.resolve();
+    }
+  }
+
+  function approvalCallbackData(): string {
+    const msg = sentMessages.find(m => m.options?.inlineKeyboard);
+    const keyboard = msg?.options?.inlineKeyboard as Array<Array<{ callback_data: string }>>;
+    return keyboard.flat()[0]!.callback_data;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("resumes the workflow when Approve is pressed, instead of parking forever", async () => {
+    stateStore["commands_co-1"] = [{
+      name: "release",
+      description: "Release",
+      steps: [
+        { id: "s1", type: "wait_approval", prompt: "Ship it?" },
+        { id: "s2", type: "send_message", text: "Decision: {{prev.result}}" },
+      ],
+      createdBy: "test",
+      createdAt: "2026-01-01",
+    }];
+    const ctx = mockCtx();
+    const run = tryCustomCommand(ctx, "token", "123", "release", "", undefined, "co-1");
+    await flush();
+
+    // The old cmd_approve_*/cmd_reject_* buttons had no handler; the fix
+    // routes approval through the same wfc_* registry `choice` uses.
+    const data = approvalCallbackData();
+    expect(data).not.toMatch(/^cmd_approve_/);
+    expect(resolveChoiceCallback(data)).toBe(true);
+
+    await run;
+    expect(sentMessages.some(m => m.text === "Decision: approved")).toBe(true);
+  });
+
+  it("resolves to rejected when Reject is pressed", async () => {
+    stateStore["commands_co-1"] = [{
+      name: "release",
+      description: "Release",
+      steps: [
+        { id: "s1", type: "wait_approval", prompt: "Ship it?" },
+        { id: "s2", type: "send_message", text: "Decision: {{prev.result}}" },
+      ],
+      createdBy: "test",
+      createdAt: "2026-01-01",
+    }];
+    const ctx = mockCtx();
+    const run = tryCustomCommand(ctx, "token", "123", "release", "", undefined, "co-1");
+    await flush();
+
+    const keyboard = sentMessages.find(m => m.options?.inlineKeyboard)?.options?.inlineKeyboard as Array<Array<{ callback_data: string }>>;
+    const rejectData = keyboard.flat()[1]!.callback_data;
+    expect(resolveChoiceCallback(rejectData)).toBe(true);
+
+    await run;
+    expect(sentMessages.some(m => m.text === "Decision: rejected")).toBe(true);
+  });
+
+  it("times out and stops waiting when nobody responds", async () => {
+    stateStore["commands_co-1"] = [{
+      name: "release",
+      description: "Release",
+      steps: [{ id: "s1", type: "wait_approval", prompt: "Ship it?", timeoutMs: 1000 }],
+      createdBy: "test",
+      createdAt: "2026-01-01",
+    }];
+    const ctx = mockCtx();
+    const run = tryCustomCommand(ctx, "token", "123", "release", "", undefined, "co-1");
+    await flush();
+
+    vi.advanceTimersByTime(1001);
+    await run;
+
+    expect(sentMessages.some(m => m.text.includes("No response in time"))).toBe(true);
   });
 });
 
