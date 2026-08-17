@@ -23,7 +23,7 @@ export default defineConfig({
        * currently achieves, so the build fails when coverage DROPS — the
        * failure mode worth catching is a change that quietly ships untested.
        *
-       * `worker.ts` went from 41% to 83% once `setup()` — the polling loop,
+       * `worker.ts` went from 33% to 83% once `setup()` — the polling loop,
        * event-subscription handlers, and job registration — became reachable
        * from a test (BLA-163). What's left there is mostly the RPC-host
        * bootstrap and a couple of callback-query branches not worth a fake
@@ -41,7 +41,7 @@ export default defineConfig({
         "src/telegram-api.ts": { statements: 88, functions: 88 },
         "src/secret-ref-validation.ts": { statements: 100, functions: 100 },
         "src/allowlist.ts": { statements: 100, functions: 100 },
-        "src/acp-bridge.ts": { statements: 70, functions: 80 },
+        "src/acp-bridge.ts": { statements: 75, functions: 90 },
         "src/adapter.ts": { statements: 100, functions: 100 },
       },
     },
