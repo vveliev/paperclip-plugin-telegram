@@ -672,13 +672,17 @@ const plugin = definePlugin({
       });
     });
 
+    // The company loadStartupConfig was scoped to. Every resolveCompanyRuntimes
+    // call in this closure compares against that same `config`, so they all
+    // need it — see the note on the diff guard in resolveCompanyRuntimes.
+    const startupConfigCompanyId = startupCompanies[0]?.id ?? null;
+
     const pollingRuntimes = await resolveCompanyRuntimes(
       ctx,
       config,
       (effectiveConfig) => Boolean(effectiveConfig.enableCommands || effectiveConfig.enableInbound),
       startupCompanies,
-      // The same company loadStartupConfig was scoped to, just above.
-      startupCompanies[0]?.id ?? null,
+      startupConfigCompanyId,
     );
     if (pollingRuntimes.length === 0) {
       ctx.logger.warn("No company-scoped Telegram bot token is resolvable during startup; setup will continue without polling");
@@ -1448,6 +1452,8 @@ const plugin = definePlugin({
           ctx,
           config,
           (effectiveConfig) => Boolean(effectiveConfig.enableInbound || effectiveConfig.escalationChatId),
+          undefined,
+          startupConfigCompanyId,
         );
         for (const runtime of runtimes) {
           await escalationManager.checkTimeouts(ctx, runtime.token, runtime.companyId);
@@ -1464,6 +1470,8 @@ const plugin = definePlugin({
           ctx,
           config,
           (effectiveConfig) => (effectiveConfig.maxSuggestionsPerHourPerCompany ?? 10) > 0,
+          undefined,
+          startupConfigCompanyId,
         );
         for (const runtime of runtimes) {
           await checkWatches(ctx, runtime.token, {
