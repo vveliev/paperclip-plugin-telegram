@@ -622,15 +622,11 @@ async function bootstrapRuntime(
 
   // --- Register bot commands with Telegram ---
   if (config.enableCommands) {
-    const allCommands = [
-      ...BOT_COMMANDS,
-      { command: "commands", description: "Manage custom workflow commands" },
-    ];
     // Non-blocking: this runs from onConfigChanged, which the host also
     // subjects to an RPC timeout, and api.telegram.org being slow must not
     // fail a config save. Idempotent on Telegram's side, so re-registering on
     // every delivery (including config-only refreshes) is harmless.
-    setMyCommands(ctx, token, allCommands)
+    setMyCommands(ctx, token, BOT_COMMANDS)
       .then((registered) => {
         if (registered) {
           ctx.logger.info("Bot commands registered with Telegram", { companyId });
