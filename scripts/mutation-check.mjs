@@ -94,6 +94,76 @@ const MUTATIONS = [
     find: '  if (!fresh || fresh.status !== "pending") {',
     replace: "  if (false) {",
   },
+  {
+    id: "issue-done-dedupe",
+    file: "src/worker.ts",
+    breaks:
+      "issue.updated(done) loses its dedupe guard, so the duplicate events Paperclip's core emits for one PATCH each send their own 'Issue Completed' message.",
+    find: "        if (!doneDedupe(`done|${event.entityId}`)) return;",
+    replace: "        // dedupe removed",
+  },
+  {
+    id: "assignment-only-notify-filter",
+    file: "src/worker.ts",
+    breaks:
+      "onlyNotifyIfAssignedTo stops filtering — every assignment change pages the configured chat regardless of who it was assigned to.",
+    find: `        if (effectiveConfig.onlyNotifyIfAssignedTo && payload.assigneeUserId !== effectiveConfig.onlyNotifyIfAssignedTo) {
+          return;
+        }`,
+    replace: "",
+  },
+  {
+    id: "digest-slot-guard",
+    file: "src/worker.ts",
+    breaks:
+      "The daily digest job fires on every scheduled tick instead of only at the configured time — a flood of digests instead of one a day.",
+    find: "        if (!manualRun && !digestSlot) continue;",
+    replace: "        // slot guard removed",
+  },
+  {
+    id: "digest-resend-guard",
+    file: "src/worker.ts",
+    breaks:
+      "The already-sent check for the digest's time slot is dropped, so a digest that fires once and one that fires on every tick within the same minute both look identical from outside — until the chat gets it twice.",
+    find: "          if (alreadySent) continue;",
+    replace: "          // resend guard removed",
+  },
+  {
+    id: "escalation-timeouts-company-wiring",
+    file: "src/worker.ts",
+    breaks:
+      "check-escalation-timeouts stops passing the startup company through to resolveCompanyRuntimes — the exact BLA-218 regression that made the job silently no-op while logging success.",
+    find: `          (effectiveConfig) => Boolean(effectiveConfig.enableInbound || effectiveConfig.escalationChatId),
+          undefined,
+          startupConfigCompanyId,
+        );`,
+    replace: `          (effectiveConfig) => Boolean(effectiveConfig.enableInbound || effectiveConfig.escalationChatId),
+          undefined,
+          undefined,
+        );`,
+  },
+  {
+    id: "check-watches-company-wiring",
+    file: "src/worker.ts",
+    breaks:
+      "check-watches stops passing the startup company through to resolveCompanyRuntimes — the same BLA-218 regression as check-escalation-timeouts, for proactive suggestions instead of escalations.",
+    find: `          (effectiveConfig) => (effectiveConfig.maxSuggestionsPerHourPerCompany ?? 10) > 0,
+          undefined,
+          startupConfigCompanyId,
+        );`,
+    replace: `          (effectiveConfig) => (effectiveConfig.maxSuggestionsPerHourPerCompany ?? 10) > 0,
+          undefined,
+          undefined,
+        );`,
+  },
+  {
+    id: "setmycommands-dedupe",
+    file: "src/worker.ts",
+    breaks:
+      "The per-token dedupe on bot-command registration is dropped, so a token shared by N companies calls Telegram's setMyCommands N times at startup instead of once — wasted calls that can trip Telegram's rate limit.",
+    find: "      if (commandRegistrationRefs.has(runtime.config.telegramBotTokenRef)) continue;",
+    replace: "      // dedupe removed",
+  },
 ];
 
 const args = process.argv.slice(2);
