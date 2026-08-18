@@ -23,17 +23,18 @@ export default defineConfig({
        * currently achieves, so the build fails when coverage DROPS — the
        * failure mode worth catching is a change that quietly ships untested.
        *
-       * The global number is still held down by `worker.ts` (41%), whose
-       * remaining gap is almost entirely the body of setup() — handler and
-       * job registration that needs a fuller host harness than the decision
-       * helpers did. Raise these as that changes; do not lower them to make a
-       * red build green.
+       * `worker.ts` went from 33% to 83% once `setup()` — the polling loop,
+       * event-subscription handlers, and job registration — became reachable
+       * from a test (BLA-163). What's left there is mostly the RPC-host
+       * bootstrap and a couple of callback-query branches not worth a fake
+       * host for. Raise these as coverage rises further; do not lower them to
+       * make a red build green.
        */
       thresholds: {
-        statements: 73,
+        statements: 84,
         branches: 78,
-        functions: 93,
-        lines: 73,
+        functions: 95,
+        lines: 84,
 
         // Modules where a regression is a user-visible failure, held higher.
         "src/decisions.ts": { statements: 98, functions: 100 },
