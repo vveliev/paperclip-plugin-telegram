@@ -184,12 +184,39 @@ export async function fetchAttention(
   )) as Response;
 
   const parsed = (await response.json()) as RawAttention;
-  const items = Array.isArray(parsed.items) ? parsed.items.map(toAttentionItem) : [];
+
+  // An ABSENT items array is a malformed response; an EMPTY one is a genuinely
+  // empty queue. Collapsing the two is how "Nothing is waiting on your input"
+  // gets printed while thirteen items sit on the Decisions page — and, because
+  // that sentence reads like an answer rather than a failure, the user acts on
+  // it. A 200 we cannot read is still a read we could not make.
+  if (!Array.isArray(parsed.items)) {
+    throw new Error(
+      `Attention response for company ${companyId} had no items array (received ${describeShape(parsed)}). ` +
+        "Refusing to report an empty queue from a response that could not be read.",
+    );
+  }
+
+  const items = parsed.items.map(toAttentionItem);
 
   return {
     items,
     totalCount: typeof parsed.totalCount === "number" ? parsed.totalCount : items.length,
   };
+}
+
+/**
+ * Describe a response by its shape for an error message. Keys only, never
+ * values — the body may carry issue titles or tokens, and this string is sent
+ * to a Telegram chat.
+ */
+function describeShape(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `an array of ${value.length}`;
+  if (typeof value !== "object") return typeof value;
+  const keys = Object.keys(value as Record<string, unknown>);
+  if (keys.length === 0) return "an empty object";
+  return `an object with keys: ${keys.slice(0, 8).join(", ")}`;
 }
 
 export function renderAttentionItem(

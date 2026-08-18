@@ -42,7 +42,12 @@ import {
   processTelegramUpdateBatch,
 } from "./polling-offset.js";
 import { getTelegramUpdateChatId, selectTelegramRuntimeForUpdate } from "./polling-dispatch.js";
-import { handleCommandsCommand, tryCustomCommand } from "./command-registry.js";
+import {
+  handleCommandsCommand,
+  tryCustomCommand,
+  isWorkflowApprovalCallback,
+  resolveWorkflowApprovalCallback,
+} from "./command-registry.js";
 import { handleRegisterWatch, checkWatches } from "./watch-registry.js";
 import {
   isInteractionAnswerCallback,
@@ -384,6 +389,7 @@ export async function resolveCompanyRuntimes(
   startupConfig: TelegramConfig,
   predicate: (config: TelegramConfig) => boolean,
   prefetchedCompanies?: Array<{ id: string }>,
+  startupConfigCompanyId?: string | null,
 ): Promise<TelegramCompanyRuntime[]> {
   // `ctx.companies.list()` is the natural way to enumerate companies, but it is
   // not reliable from setup(): on hosts that enforce per-invocation scoping it
@@ -405,6 +411,15 @@ export async function resolveCompanyRuntimes(
   const companies = prefetchedCompanies ?? (await listCompaniesForStartup(ctx));
   const runtimes: TelegramCompanyRuntime[] = [];
 
+  // Every `continue` below means "this company will not be polled". When they
+  // were silent, a startup that polled nothing was indistinguishable from a
+  // startup with nothing to poll, and diagnosing the difference meant reading
+  // the database. Each skip now records which of the six gates closed.
+  const skipped: Array<{ companyId: string; reason: string }> = [];
+  const skip = (companyId: string, reason: string) => {
+    skipped.push({ companyId, reason });
+  };
+
   for (const company of companies) {
     let scopedConfig: Record<string, unknown>;
     try {
@@ -414,9 +429,13 @@ export async function resolveCompanyRuntimes(
         companyId: company.id,
         error: String(err),
       });
+      skip(company.id, `config.get failed: ${String(err)}`);
       continue;
     }
-    if (!("telegramBotTokenRef" in scopedConfig)) continue;
+    if (!("telegramBotTokenRef" in scopedConfig)) {
+      skip(company.id, "scoped config has no telegramBotTokenRef — the plugin config was never saved for this company");
+      continue;
+    }
 
     const effectiveConfig = { ...startupConfig, ...scopedConfig } as unknown as TelegramConfig;
     const hasCompanyTelegramRoute = [
@@ -434,15 +453,39 @@ export async function resolveCompanyRuntimes(
       const startupValue = startupConfig[key as keyof TelegramConfig];
       return typeof value === "string" && value.trim() && value !== startupValue;
     });
-    if (!hasCompanyTelegramRoute) continue;
 
-    if (!predicate(effectiveConfig)) continue;
+    // The diff above exists so that companies merely inheriting the instance
+    // config do not each spawn a runtime for the same bot. It cannot be applied
+    // to the company `startupConfig` was itself loaded for: setup() resolves the
+    // company first and loads config scoped to it, so for that company the two
+    // are the same object and NOTHING differs — the company is skipped, no
+    // runtime is built, and long polling never starts. Every inbound feature is
+    // then dead for the worker's life while startup still logs success.
+    //
+    // The inversion is what makes it vicious: polling only survives when the
+    // startup config load FAILS and leaves defaults to differ from.
+    const isStartupConfigCompany = Boolean(startupConfigCompanyId) && company.id === startupConfigCompanyId;
+    if (!isStartupConfigCompany && !hasCompanyTelegramRoute) {
+      skip(company.id, "scoped config defines no Telegram route distinct from the instance config");
+      continue;
+    }
+
+    if (!predicate(effectiveConfig)) {
+      skip(company.id, "enableCommands and enableInbound are both off");
+      continue;
+    }
 
     const tokenRef = effectiveConfig.telegramBotTokenRef;
-    if (!tokenRef) continue;
+    if (!tokenRef) {
+      skip(company.id, "telegramBotTokenRef is present but empty");
+      continue;
+    }
 
     const token = await resolveTelegramBotTokenRef(ctx, tokenRef, company.id);
-    if (!token) continue;
+    if (!token) {
+      skip(company.id, "telegramBotTokenRef did not resolve — the secret needs a binding, which is only created when plugin config is saved");
+      continue;
+    }
 
     const baseUrl = effectiveConfig.paperclipBaseUrl || startupConfig.paperclipBaseUrl || "http://localhost:3100";
     const publicUrl = effectiveConfig.paperclipPublicUrl || baseUrl;
@@ -452,6 +495,15 @@ export async function resolveCompanyRuntimes(
       token,
       baseUrl,
       publicUrl,
+    });
+  }
+
+  // Report the reasons when the result is nothing, which is the only case where
+  // anyone needs them and the case that used to be undiagnosable.
+  if (runtimes.length === 0 && skipped.length > 0) {
+    ctx.logger.warn("No Telegram runtime was built for any company", {
+      companies: companies.length,
+      skipped,
     });
   }
 
@@ -665,11 +717,17 @@ const plugin = definePlugin({
       });
     });
 
+    // The company loadStartupConfig was scoped to. Every resolveCompanyRuntimes
+    // call in this closure compares against that same `config`, so they all
+    // need it — see the note on the diff guard in resolveCompanyRuntimes.
+    const startupConfigCompanyId = startupCompanies[0]?.id ?? null;
+
     const pollingRuntimes = await resolveCompanyRuntimes(
       ctx,
       config,
       (effectiveConfig) => Boolean(effectiveConfig.enableCommands || effectiveConfig.enableInbound),
       startupCompanies,
+      startupConfigCompanyId,
     );
     if (pollingRuntimes.length === 0) {
       ctx.logger.warn("No company-scoped Telegram bot token is resolvable during startup; setup will continue without polling");
@@ -1439,6 +1497,8 @@ const plugin = definePlugin({
           ctx,
           config,
           (effectiveConfig) => Boolean(effectiveConfig.enableInbound || effectiveConfig.escalationChatId),
+          undefined,
+          startupConfigCompanyId,
         );
         for (const runtime of runtimes) {
           await escalationManager.checkTimeouts(ctx, runtime.token, runtime.companyId);
@@ -1455,6 +1515,8 @@ const plugin = definePlugin({
           ctx,
           config,
           (effectiveConfig) => (effectiveConfig.maxSuggestionsPerHourPerCompany ?? 10) > 0,
+          undefined,
+          startupConfigCompanyId,
         );
         for (const runtime of runtimes) {
           await checkWatches(ctx, runtime.token, {
@@ -1590,7 +1652,20 @@ export async function handleUpdate(
     const boardApiToken = BOARD_TOKEN_COMMANDS.has(command)
       ? await resolveBoardApiToken(ctx, effectiveConfig, companyId)
       : undefined;
-    await handleCommand(ctx, token, chatId, command, args, threadId, effectiveBaseUrl, effectivePublicUrl, companyId, boardApiToken, effectiveConfig.maxAgentsPerThread);
+    await handleCommand(
+      ctx, token, chatId, command, args, threadId, effectiveBaseUrl, effectivePublicUrl, companyId, boardApiToken,
+      effectiveConfig.maxAgentsPerThread,
+      {
+        topicRouting: effectiveConfig.topicRouting,
+        notifyOnIssueCreated: effectiveConfig.notifyOnIssueCreated,
+        notifyOnIssueDone: effectiveConfig.notifyOnIssueDone,
+        notifyOnIssueAssigned: effectiveConfig.notifyOnIssueAssigned,
+        notifyOnApprovalCreated: effectiveConfig.notifyOnApprovalCreated,
+        notifyOnAgentError: effectiveConfig.notifyOnAgentError,
+        notifyOnAgentRunStarted: effectiveConfig.notifyOnAgentRunStarted,
+        notifyOnAgentRunFinished: effectiveConfig.notifyOnAgentRunFinished,
+      },
+    );
     return;
   }
 
@@ -1664,6 +1739,14 @@ async function handleCallbackQuery(
 
   if (isInteractionAnswerCallback(data)) {
     await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
+    return;
+  }
+
+  // Must precede the "approve_" branch below only by intent, not by necessity:
+  // these are "cmd_approve_"/"cmd_reject_" and cannot collide with it. Kept
+  // adjacent so the two approval flows are read together.
+  if (isWorkflowApprovalCallback(data)) {
+    await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
     return;
   }
 

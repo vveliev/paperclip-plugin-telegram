@@ -137,8 +137,31 @@ describe("fetchAttention", () => {
     await expect(fetchAttention(makeCtx(), "http://x", "c1", "tok")).rejects.toThrow("403");
   });
 
-  it("survives a response with no items array", async () => {
+  it("throws on a response with no items array rather than reporting an empty queue", async () => {
+    // This previously returned { items: [], totalCount: 0 } and was tested as
+    // "survives a response with no items array". It does not survive it — it
+    // renders as "Nothing is waiting on your input" while the Decisions page is
+    // full, which is the one failure mode the user acts on. Observed live.
     response = {};
+    await expect(fetchAttention(makeCtx(), "http://x", "c1", "tok")).rejects.toThrow(/items array/);
+  });
+
+  it("names the company and the shape it got, so the cause is visible", async () => {
+    response = { error: "Board access required" };
+    await expect(fetchAttention(makeCtx(), "http://x", "c1", "tok")).rejects.toThrow(/c1/);
+    await expect(fetchAttention(makeCtx(), "http://x", "c1", "tok")).rejects.toThrow(/keys: error/);
+  });
+
+  it("does not leak response values into the error, only keys", async () => {
+    // The message is sent to a Telegram chat; bodies can carry issue titles.
+    response = { secretField: "s3cret-value", other: 1 };
+    await expect(fetchAttention(makeCtx(), "http://x", "c1", "tok")).rejects.toThrow(/secretField/);
+    await expect(fetchAttention(makeCtx(), "http://x", "c1", "tok")).rejects.not.toThrow(/s3cret-value/);
+  });
+
+  it("still reports a genuinely empty queue as empty", async () => {
+    // The distinction that matters: [] is an answer, missing is a failure.
+    response = { items: [], totalCount: 0 };
     const result = await fetchAttention(makeCtx(), "http://x", "c1", "tok");
     expect(result).toEqual({ items: [], totalCount: 0 });
   });

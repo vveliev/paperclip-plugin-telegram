@@ -535,6 +535,61 @@ describe("/start", () => {
   });
 });
 
+describe("/settings", () => {
+  it("shows unlinked status and default notification toggles with no state or config", async () => {
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "settings", "");
+
+    expect(sentMessages.length).toBe(1);
+    const text = sentMessages[0].text;
+    expect(text).toContain("Settings");
+    expect(text).toContain("Not linked");
+    expect(text).toContain("Topic routing");
+    expect(text).toContain("Notifications");
+  });
+
+  it("shows the linked company and link date", async () => {
+    stateStore["chat_123"] = { companyId: "co-1", companyName: "Test Co", linkedAt: "2026-08-01T12:00:00.000Z" };
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "settings", "");
+
+    const text = sentMessages[0].text;
+    expect(text).toContain("Test Co");
+    expect(text).toContain("2026\\-08\\-01");
+  });
+
+  it("reflects the company's resolved notification config, not just defaults", async () => {
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "settings", "", undefined, undefined, undefined, "co-1", undefined, undefined, {
+      topicRouting: true,
+      notifyOnIssueCreated: false,
+      notifyOnIssueDone: true,
+      notifyOnIssueAssigned: true,
+      notifyOnApprovalCreated: false,
+      notifyOnAgentError: true,
+      notifyOnAgentRunStarted: false,
+      notifyOnAgentRunFinished: false,
+    });
+
+    const text = sentMessages[0].text;
+    expect(text).toContain("Topic routing: *on*");
+  });
+
+  it("surfaces the topic mapping count when present", async () => {
+    stateStore["topic-map-123"] = { Backend: { projectId: "p1", projectName: "Backend", topicId: "5" } };
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "settings", "");
+
+    expect(sentMessages[0].text).toContain("1 mapping");
+  });
+
+  it("passes messageThreadId through", async () => {
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "settings", "", 42);
+    expect(sentMessages[0].options).toMatchObject({ messageThreadId: 42 });
+  });
+});
+
 describe("BOT_COMMANDS", () => {
   it("has all expected commands", () => {
     const names = BOT_COMMANDS.map(c => c.command);
@@ -544,6 +599,7 @@ describe("BOT_COMMANDS", () => {
     expect(names).toContain("agents");
     expect(names).toContain("approve");
     expect(names).toContain("help");
+    expect(names).toContain("settings");
     expect(names).toContain("acp");
     expect(names).toContain("commands");
     expect(names).toContain("connect");
