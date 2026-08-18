@@ -23,4 +23,5 @@ jobs:
       # passes on a change that drops coverage, which is what the ratchet is
       # there to stop.
       - run: npm run test:coverage
+      - run: npm run test:mutations
       - run: npm run build
