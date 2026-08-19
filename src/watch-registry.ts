@@ -83,7 +83,7 @@ export async function handleRegisterWatch(
   const watchId = `watch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
   if (useBuiltin && BUILTIN_TEMPLATES[useBuiltin]) {
-    const builtin = BUILTIN_TEMPLATES[useBuiltin]!;
+    const builtin = BUILTIN_TEMPLATES[useBuiltin];
     watch = {
       ...builtin,
       watchId,

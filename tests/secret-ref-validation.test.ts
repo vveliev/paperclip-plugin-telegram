@@ -90,7 +90,7 @@ describe("validateSecretRefFields", () => {
 
   it("describes non-string values by their type rather than echoing them", () => {
     const errors = validateSecretRefFields({
-      telegramBotTokenRef: { id: VALID_UUID } as unknown as string,
+      telegramBotTokenRef: { id: VALID_UUID },
     });
     expect(errors[0]).toContain("<object>");
   });
