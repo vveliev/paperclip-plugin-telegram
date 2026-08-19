@@ -3,7 +3,11 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    # `prerelease` is this fork's default branch and the one work merges into,
+    # so it needs CI on push as much as `main` does. Without it a PR merge
+    # lands on the shipping branch with nothing re-run against the merge
+    # result. `main` stays listed to keep this file upstream-shaped.
+    branches: [main, prerelease]
 
 permissions:
   contents: read
