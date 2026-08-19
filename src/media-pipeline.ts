@@ -144,18 +144,22 @@ export async function handleMediaMessage(
           projectId,
         );
       } else {
-        // Marked, not endorsed: `events.emit` is a host RPC returning
-        // Promise<void>, so a rejection here is swallowed and the event
-        // silently never lands — the exact failure shape this plugin keeps
-        // hitting. Awaiting it changes behaviour, so it needs a test that
-        // fails when reintroduced rather than a drive-by fix.
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
-        ctx.events.emit("acp-spawn", companyId, {
+        // `events.emit` is a host RPC — a rejection must not propagate: this
+        // runs inside handleUpdate's call graph, and an uncaught throw there
+        // wedges Telegram polling for every chat.
+        await ctx.events.emit("acp-spawn", companyId, {
           type: "message",
           sessionId: target.sessionId,
           chatId,
           threadId,
           text: prompt,
+        }).catch((err: unknown) => {
+          ctx.logger.error("Failed to emit acp-spawn for media message", {
+            sessionId: target.sessionId,
+            chatId,
+            threadId,
+            error: String(err),
+          });
         });
       }
     }

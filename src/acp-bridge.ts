@@ -348,19 +348,22 @@ async function handleAcpSpawn(
   await saveSessions(ctx, chatId, messageThreadId, sessions);
 
   if (transport === "acp") {
-    // Emit ACP spawn event - companyId is SECOND arg
-    // Marked, not endorsed: `events.emit` is a host RPC returning
-    // Promise<void>, so a rejection here is swallowed and the event
-    // silently never lands — the exact failure shape this plugin keeps
-    // hitting. Awaiting it changes behaviour, so it needs a test that
-    // fails when reintroduced rather than a drive-by fix.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
+    // `events.emit` is a host RPC — a rejection must not propagate: this
+    // runs inside handleUpdate's call graph, and an uncaught throw there
+    // wedges Telegram polling for every chat.
+    await ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "spawn",
       sessionId,
       agentName: trimmedName,
       chatId,
       threadId: messageThreadId,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit acp-spawn", {
+        sessionId,
+        chatId,
+        threadId: messageThreadId,
+        error: String(err),
+      });
     });
   }
 
@@ -480,17 +483,21 @@ async function handleAcpCancel(
       ctx.logger.error("Failed to close native session", { error: String(err) });
     }
   } else {
-    // Marked, not endorsed: `events.emit` is a host RPC returning
-    // Promise<void>, so a rejection here is swallowed and the event
-    // silently never lands — the exact failure shape this plugin keeps
-    // hitting. Awaiting it changes behaviour, so it needs a test that
-    // fails when reintroduced rather than a drive-by fix.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
+    // `events.emit` is a host RPC — a rejection must not propagate: this
+    // runs inside handleUpdate's call graph, and an uncaught throw there
+    // wedges Telegram polling for every chat.
+    await ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "cancel",
       sessionId: target.sessionId,
       chatId,
       threadId: messageThreadId,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit acp-spawn cancel", {
+        sessionId: target.sessionId,
+        chatId,
+        threadId: messageThreadId,
+        error: String(err),
+      });
     });
   }
 
@@ -571,17 +578,21 @@ async function handleAcpClose(
       ctx.logger.error("Failed to close native session", { error: String(err) });
     }
   } else {
-    // Marked, not endorsed: `events.emit` is a host RPC returning
-    // Promise<void>, so a rejection here is swallowed and the event
-    // silently never lands — the exact failure shape this plugin keeps
-    // hitting. Awaiting it changes behaviour, so it needs a test that
-    // fails when reintroduced rather than a drive-by fix.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
+    // `events.emit` is a host RPC — a rejection must not propagate: this
+    // runs inside handleUpdate's call graph, and an uncaught throw there
+    // wedges Telegram polling for every chat.
+    await ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "close",
       sessionId: targetSession.sessionId,
       chatId,
       threadId: messageThreadId,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit acp-spawn close", {
+        sessionId: targetSession.sessionId,
+        chatId,
+        threadId: messageThreadId,
+        error: String(err),
+      });
     });
   }
 
@@ -695,19 +706,22 @@ export async function routeMessageToAgent(
       return false;
     }
   } else {
-    // ACP transport - emit event, companyId is SECOND arg
-    // Marked, not endorsed: `events.emit` is a host RPC returning
-    // Promise<void>, so a rejection here is swallowed and the event
-    // silently never lands — the exact failure shape this plugin keeps
-    // hitting. Awaiting it changes behaviour, so it needs a test that
-    // fails when reintroduced rather than a drive-by fix.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
+    // `events.emit` is a host RPC — a rejection must not propagate: this
+    // runs inside handleUpdate's call graph, and an uncaught throw there
+    // wedges Telegram polling for every chat.
+    await ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "message",
       sessionId: targetSession.sessionId,
       chatId,
       threadId,
       text,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit acp-spawn for routed message", {
+        sessionId: targetSession.sessionId,
+        chatId,
+        threadId,
+        error: String(err),
+      });
     });
   }
 
@@ -1134,18 +1148,22 @@ async function executeHandoff(
     await saveSessions(ctx, chatId, threadId, sessions);
 
     if (transport === "acp") {
-      // Marked, not endorsed: `events.emit` is a host RPC returning
-      // Promise<void>, so a rejection here is swallowed and the event
-      // silently never lands — the exact failure shape this plugin keeps
-      // hitting. Awaiting it changes behaviour, so it needs a test that
-      // fails when reintroduced rather than a drive-by fix.
-      // eslint-disable-next-line @typescript-eslint/no-floating-promises
-      ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
+      // `events.emit` is a host RPC — a rejection must not propagate: this
+      // runs inside handleUpdate's call graph, and an uncaught throw there
+      // wedges Telegram polling for every chat.
+      await ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
         type: "spawn",
         sessionId,
         agentName: targetAgent,
         chatId,
         threadId,
+      }).catch((err: unknown) => {
+        ctx.logger.error("Failed to emit acp-spawn for auto-spawned handoff target", {
+          sessionId,
+          chatId,
+          threadId,
+          error: String(err),
+        });
       });
     }
 
@@ -1168,18 +1186,22 @@ async function executeHandoff(
       "handoff",
     );
   } else {
-    // Marked, not endorsed: `events.emit` is a host RPC returning
-    // Promise<void>, so a rejection here is swallowed and the event
-    // silently never lands — the exact failure shape this plugin keeps
-    // hitting. Awaiting it changes behaviour, so it needs a test that
-    // fails when reintroduced rather than a drive-by fix.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
+    // `events.emit` is a host RPC — a rejection must not propagate: this
+    // runs inside handleUpdate's call graph, and an uncaught throw there
+    // wedges Telegram polling for every chat.
+    await ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
       type: "message",
       sessionId: targetSession.sessionId,
       chatId,
       threadId,
       text: `[Handoff context] ${contextSummary}`,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit acp-spawn for handoff context", {
+        sessionId: targetSession.sessionId,
+        chatId,
+        threadId,
+        error: String(err),
+      });
     });
   }
 }
@@ -1257,18 +1279,22 @@ export async function handleDiscussToolCall(
     await saveSessions(ctx, chatId, threadId, sessions);
 
     if (transport === "acp") {
-      // Marked, not endorsed: `events.emit` is a host RPC returning
-      // Promise<void>, so a rejection here is swallowed and the event
-      // silently never lands — the exact failure shape this plugin keeps
-      // hitting. Awaiting it changes behaviour, so it needs a test that
-      // fails when reintroduced rather than a drive-by fix.
-      // eslint-disable-next-line @typescript-eslint/no-floating-promises
-      ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
+      // `events.emit` is a host RPC — a rejection must not propagate: this
+      // runs inside handleUpdate's call graph, and an uncaught throw there
+      // wedges Telegram polling for every chat.
+      await ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
         type: "spawn",
         sessionId,
         agentName: targetAgent,
         chatId,
         threadId,
+      }).catch((err: unknown) => {
+        ctx.logger.error("Failed to emit acp-spawn for auto-spawned discussion target", {
+          sessionId,
+          chatId,
+          threadId,
+          error: String(err),
+        });
       });
     }
 
@@ -1330,18 +1356,22 @@ export async function handleDiscussToolCall(
       "discussion",
     );
   } else {
-    // Marked, not endorsed: `events.emit` is a host RPC returning
-    // Promise<void>, so a rejection here is swallowed and the event
-    // silently never lands — the exact failure shape this plugin keeps
-    // hitting. Awaiting it changes behaviour, so it needs a test that
-    // fails when reintroduced rather than a drive-by fix.
-    // eslint-disable-next-line @typescript-eslint/no-floating-promises
-    ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
+    // `events.emit` is a host RPC — a rejection must not propagate: this
+    // runs inside handleUpdate's call graph, and an uncaught throw there
+    // wedges Telegram polling for every chat.
+    await ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
       type: "message",
       sessionId: targetSession.sessionId,
       chatId,
       threadId,
       text: `[Discussion: ${topic}] ${initialMessage}`,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit acp-spawn for discussion start", {
+        sessionId: targetSession.sessionId,
+        chatId,
+        threadId,
+        error: String(err),
+      });
     });
   }
 
@@ -1467,18 +1497,23 @@ async function checkConversationLoopContinuation(
           "discussion_turn",
         );
       } else {
-        // Marked, not endorsed: `events.emit` is a host RPC returning
-        // Promise<void>, so a rejection here is swallowed and the event
-        // silently never lands — the exact failure shape this plugin keeps
-        // hitting. Awaiting it changes behaviour, so it needs a test that
-        // fails when reintroduced rather than a drive-by fix.
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
-        ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
+        // `events.emit` is a host RPC — a rejection must not propagate:
+        // this runs once per discussion turn inside handleUpdate's call
+        // graph, and an uncaught throw here wedges Telegram polling for
+        // every chat.
+        await ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
           type: "message",
           sessionId: nextSessionId,
           chatId,
           threadId,
           text: `[Discussion: ${loop.topic}] ${text}`,
+        }).catch((err: unknown) => {
+          ctx.logger.error("Failed to emit acp-spawn for discussion turn", {
+            sessionId: nextSessionId,
+            chatId,
+            threadId,
+            error: String(err),
+          });
         });
       }
     }
