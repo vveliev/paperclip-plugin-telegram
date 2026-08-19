@@ -225,14 +225,14 @@ describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same com
     const runtimes = await resolveCompanyRuntimes(
       mockCtx(),
       { ...companyConfig } as never,
-      wantsCommands as never,
+      wantsCommands,
       [{ id: "BLA" }],
       "BLA",
     );
 
     expect(runtimes).toHaveLength(1);
-    expect(runtimes[0]!.companyId).toBe("BLA");
-    expect(runtimes[0]!.token).toBe("bot-token-123");
+    expect(runtimes[0].companyId).toBe("BLA");
+    expect(runtimes[0].token).toBe("bot-token-123");
   });
 
   it("still builds a runtime when the startup config load failed and left defaults", async () => {
@@ -241,7 +241,7 @@ describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same com
     configByCompany["BLA"] = { ...companyConfig };
 
     const runtimes = await resolveCompanyRuntimes(
-      mockCtx(), {} as never, wantsCommands as never, [{ id: "BLA" }], "BLA",
+      mockCtx(), {} as never, wantsCommands, [{ id: "BLA" }], "BLA",
     );
 
     expect(runtimes).toHaveLength(1);
@@ -254,7 +254,7 @@ describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same com
     configByCompany["OTHER"] = { ...companyConfig };
 
     const runtimes = await resolveCompanyRuntimes(
-      mockCtx(), { ...companyConfig } as never, wantsCommands as never,
+      mockCtx(), { ...companyConfig } as never, wantsCommands,
       [{ id: "BLA" }, { id: "OTHER" }], "BLA",
     );
 
@@ -266,7 +266,7 @@ describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same com
     configByCompany["OTHER"] = { ...companyConfig, defaultChatId: "-1009999" };
 
     const runtimes = await resolveCompanyRuntimes(
-      mockCtx(), { ...companyConfig } as never, wantsCommands as never,
+      mockCtx(), { ...companyConfig } as never, wantsCommands,
       [{ id: "BLA" }, { id: "OTHER" }], "BLA",
     );
 
@@ -280,7 +280,7 @@ describe("resolveCompanyRuntimes (BLA-175: startup config scoped to the same com
 
     const runtimes = await resolveCompanyRuntimes(
       mockCtx(), { ...companyConfig, enableCommands: false } as never,
-      wantsCommands as never, [{ id: "BLA" }], "BLA",
+      wantsCommands, [{ id: "BLA" }], "BLA",
     );
 
     expect(runtimes).toHaveLength(0);
@@ -309,13 +309,13 @@ describe("resolveCompanyRuntimes from scheduled jobs (BLA-175 follow-up)", () =>
       mockCtx(),
       { ...companyConfig } as never,
       ((c: TelegramConfigLike & { escalationChatId?: string }) =>
-        Boolean(c.enableInbound || c.escalationChatId)) as never,
+        Boolean(c.enableInbound || c.escalationChatId)),
       undefined,
       "BLA",
     );
 
     expect(runtimes).toHaveLength(1);
-    expect(runtimes[0]!.companyId).toBe("BLA");
+    expect(runtimes[0].companyId).toBe("BLA");
   });
 
   it("returns nothing when the startup company id is withheld, proving the argument is load-bearing", async () => {
@@ -326,7 +326,7 @@ describe("resolveCompanyRuntimes from scheduled jobs (BLA-175 follow-up)", () =>
       mockCtx(),
       { ...companyConfig } as never,
       ((c: TelegramConfigLike & { escalationChatId?: string }) =>
-        Boolean(c.enableInbound || c.escalationChatId)) as never,
+        Boolean(c.enableInbound || c.escalationChatId)),
       undefined,
       null,
     );
@@ -346,7 +346,7 @@ describe("every resolveCompanyRuntimes call site passes the startup company", ()
     const src = readFileSync(new URL("../src/worker.ts", import.meta.url), "utf8");
 
     const calls = [...src.matchAll(/resolveCompanyRuntimes\(([\s\S]*?)\n\s*\);/g)]
-      .map((m) => m[1]!)
+      .map((m) => m[1])
       // the declaration itself is not a call
       .filter((body) => !body.includes("ctx: PluginContext"));
 
@@ -368,7 +368,7 @@ describe("resolveCompanyRuntimes diagnostics (BLA-177)", () => {
       (ctx.secrets.resolve as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     }
     const runtimes = await resolveCompanyRuntimes(
-      ctx, {} as never, wantsCommands as never, [{ id: "BLA" }], null,
+      ctx, {} as never, wantsCommands, [{ id: "BLA" }], null,
     );
     expect(runtimes).toHaveLength(0);
     const call = (ctx.logger.warn as ReturnType<typeof vi.fn>).mock.calls
@@ -399,7 +399,7 @@ describe("resolveCompanyRuntimes diagnostics (BLA-177)", () => {
       telegramBotTokenRef: { type: "secret_ref" }, defaultChatId: "-100", enableCommands: true,
     };
     const ctx = mockCtx();
-    await resolveCompanyRuntimes(ctx, {} as never, wantsCommands as never, [{ id: "BLA" }], null);
+    await resolveCompanyRuntimes(ctx, {} as never, wantsCommands, [{ id: "BLA" }], null);
 
     const noisy = (ctx.logger.warn as ReturnType<typeof vi.fn>).mock.calls
       .filter((c) => String(c[0]).includes("No Telegram runtime was built"));

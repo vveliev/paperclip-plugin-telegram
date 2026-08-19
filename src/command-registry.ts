@@ -234,6 +234,11 @@ async function importCommand(
 
   let definition: { name: string; description: string; steps: WorkflowStep[] };
   try {
+    // JSON.parse returns `any` and this trusts it to match the declared
+    // shape. That trust is unverified — a malformed import is caught below
+    // only if it fails to PARSE, not if it parses into the wrong shape.
+    // Narrowing it needs a validator and its own tests.
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     definition = JSON.parse(jsonStr);
   } catch {
     await sendMessage(ctx, token, chatId, "Invalid JSON. Please provide a valid command definition.", { messageThreadId });
@@ -368,7 +373,7 @@ async function executeWorkflow(
   const results: StepResult[] = [...priorResults];
 
   for (let index = startIndex; index < cmd.steps.length; index++) {
-    const step = cmd.steps[index]!;
+    const step = cmd.steps[index];
     try {
       const result = await executeStep(ctx, token, chatId, step, args, results, messageThreadId, companyId);
 
@@ -430,12 +435,12 @@ async function executeStep(
     let result = template;
     // Replace {{arg0}}, {{arg1}}, etc.
     for (let i = 0; i < args.length; i++) {
-      result = result.replace(new RegExp(`\\{\\{arg${i}\\}\\}`, "g"), args[i]!);
+      result = result.replace(new RegExp(`\\{\\{arg${i}\\}\\}`, "g"), args[i]);
     }
     result = result.replace(/\{\{args\}\}/g, args.join(" "));
     // Replace {{prev.result}}, {{step_id.result}}
     if (prevResults.length > 0) {
-      const lastResult = prevResults[prevResults.length - 1]!;
+      const lastResult = prevResults[prevResults.length - 1];
       result = result.replace(/\{\{prev\.result\}\}/g, lastResult.result);
     }
     for (const prev of prevResults) {

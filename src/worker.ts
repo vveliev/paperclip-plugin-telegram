@@ -269,7 +269,7 @@ export async function resolveBoardApiToken(
         });
         continue;
       }
-      return await ctx.secrets.resolve(ref as unknown as string, {
+      return await ctx.secrets.resolve(ref, {
         companyId: companyId ?? undefined,
         configPath: candidate.source === "config" ? "paperclipBoardApiTokenRef" : undefined,
       });
@@ -437,7 +437,7 @@ export async function resolveCompanyRuntimes(
       continue;
     }
 
-    const effectiveConfig = { ...startupConfig, ...scopedConfig } as unknown as TelegramConfig;
+    const effectiveConfig = { ...startupConfig, ...scopedConfig };
     const hasCompanyTelegramRoute = [
       "telegramBotTokenRef",
       "defaultChatId",
@@ -695,7 +695,7 @@ export const plugin = definePlugin({
     const startupCompanies = await listCompaniesForStartup(ctx);
     const rawConfig = await loadStartupConfig(
       ctx,
-      {} as Record<string, unknown>,
+      {},
       startupCompanies[0]?.id ?? null,
     );
     ctx.logger.info("Telegram plugin config loaded");
@@ -1264,7 +1264,7 @@ export const plugin = definePlugin({
           const companyLabel = company.name ? ` \\- ${escapeMarkdownV2(company.name)}` : "";
           const digestLabel = effectiveDigestMode === "bidaily" ? "Digest" : "Daily Digest";
           const lines = [
-            escapeMarkdownV2("\ud83d\udcca") + ` *${escapeMarkdownV2(digestLabel)}${companyLabel} \\- ${escapeMarkdownV2(dateStr!)}*`,
+            escapeMarkdownV2("\ud83d\udcca") + ` *${escapeMarkdownV2(digestLabel)}${companyLabel} \\- ${escapeMarkdownV2(dateStr)}*`,
             "",
             `${escapeMarkdownV2("\u2705")} Tasks completed: *${completedToday.length}*`,
             `${escapeMarkdownV2("\ud83d\udccb")} Tasks created: *${createdToday.length}*`,
@@ -1272,7 +1272,7 @@ export const plugin = definePlugin({
           ];
 
           if (activeAgents.length > 0) {
-            const topAgent = activeAgents[0]!.name;
+            const topAgent = activeAgents[0].name;
             lines.push(`${escapeMarkdownV2("\u2b50")} Top performer: *${escapeMarkdownV2(topAgent)}*`);
           }
 
@@ -1568,7 +1568,7 @@ export const plugin = definePlugin({
     if (allowlistErrors.length > 0) {
       return { ok: false, errors: allowlistErrors };
     }
-    const topicErrors = validateConfiguredTopicIds(config as Record<string, unknown>);
+    const topicErrors = validateConfiguredTopicIds(config);
     if (topicErrors.length > 0) {
       return { ok: false, errors: topicErrors };
     }
@@ -1623,7 +1623,7 @@ export async function handleUpdate(
     if (companyId) {
       const effectiveConfig = await resolveConfig(ctx, config, companyId);
       const effectivePublicUrl = effectiveConfig.paperclipPublicUrl || effectiveConfig.paperclipBaseUrl || publicUrl;
-      const handled = await handleMediaMessage(ctx, token, msg as Parameters<typeof handleMediaMessage>[2], {
+      const handled = await handleMediaMessage(ctx, token, msg, {
         briefAgentId: effectiveConfig.briefAgentId ?? "",
         briefAgentChatIds: effectiveConfig.briefAgentChatIds ?? [],
         transcriptionApiKeyRef: effectiveConfig.transcriptionApiKeyRef ?? "",

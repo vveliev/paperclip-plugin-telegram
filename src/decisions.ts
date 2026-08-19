@@ -181,7 +181,7 @@ export async function fetchAttention(
     ctx,
     `${baseUrl}/api/companies/${companyId}/attention`,
     { method: "GET", headers: { ...buildPaperclipAuthHeaders(boardApiToken) } },
-  )) as Response;
+  ));
 
   const parsed = (await response.json()) as RawAttention;
 
@@ -214,7 +214,7 @@ function describeShape(value: unknown): string {
   if (value === null) return "null";
   if (Array.isArray(value)) return `an array of ${value.length}`;
   if (typeof value !== "object") return typeof value;
-  const keys = Object.keys(value as Record<string, unknown>);
+  const keys = Object.keys(value);
   if (keys.length === 0) return "an empty object";
   return `an object with keys: ${keys.slice(0, 8).join(", ")}`;
 }

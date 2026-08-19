@@ -6,7 +6,7 @@ let sentMessages: Array<{ chatId: string; text: string; options?: Record<string,
 let stateStore: Record<string, unknown> = {};
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, text: string, options?: Record<string, unknown>) => {
@@ -77,7 +77,7 @@ describe("handleRegisterWatch - storage and retrieval", () => {
     }, "co-1");
 
     expect(result.content).toBeDefined();
-    const parsed = JSON.parse(result.content!);
+    const parsed = JSON.parse(result.content);
     expect(parsed.status).toBe("registered");
     expect(parsed.name).toBe("Invoice Overdue");
   });
@@ -266,7 +266,7 @@ describe("checkWatches - deduplication", () => {
 describe("Built-in template loading", () => {
   it("loads invoice-overdue template with correct conditions", async () => {
     const ctx = mockCtx();
-    const result = await handleRegisterWatch(ctx, {
+    await handleRegisterWatch(ctx, {
       builtinTemplate: "invoice-overdue",
       chatId: "chat-1",
     }, "co-1");
@@ -283,7 +283,7 @@ describe("Built-in template loading", () => {
 
   it("loads lead-stale template with correct conditions", async () => {
     const ctx = mockCtx();
-    const result = await handleRegisterWatch(ctx, {
+    await handleRegisterWatch(ctx, {
       builtinTemplate: "lead-stale",
       chatId: "chat-1",
     }, "co-1");

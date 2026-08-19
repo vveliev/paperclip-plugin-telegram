@@ -5,7 +5,7 @@ let sendMessageCalls: Array<unknown[]> = [];
 let editMessageCalls: Array<unknown[]> = [];
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (...args: unknown[]) => {

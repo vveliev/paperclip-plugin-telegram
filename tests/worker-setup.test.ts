@@ -19,7 +19,7 @@ import { EscalationManager } from "../src/escalation.js";
 
 const checkWatchesMock = vi.fn(async () => {});
 vi.mock("../src/watch-registry.js", async () => {
-  const actual = await vi.importActual("../src/watch-registry.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/watch-registry.js");
   return { ...actual, checkWatches: checkWatchesMock };
 });
 
@@ -222,7 +222,7 @@ function makeEvent(overrides: Partial<PluginEvent> & { payload?: Record<string, 
     entityType: "issue",
     payload: {},
     ...overrides,
-  } as PluginEvent;
+  };
 }
 
 async function emit(
@@ -333,7 +333,7 @@ describe("setup() event subscriptions", () => {
     await emit(harness, "issue.updated", makeEvent({ payload: { identifier: "ACME-1", status: "done" } }));
 
     const [call] = sendMessageCalls(harness.calls);
-    const text = String(bodyOf(call!).text);
+    const text = String(bodyOf(call).text);
     expect(text).toContain("Fetched title");
     expect(text).toContain("Fetched comment");
   });
@@ -521,7 +521,7 @@ describe("setup() daily digest job", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["telegram-daily-digest"]!({
+    await harness.jobs["telegram-daily-digest"]({
       jobKey: "telegram-daily-digest",
       runId: "run-1",
       trigger: "manual",
@@ -538,7 +538,7 @@ describe("setup() daily digest job", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["telegram-daily-digest"]!({
+    await harness.jobs["telegram-daily-digest"]({
       jobKey: "telegram-daily-digest",
       runId: "run-1",
       trigger: "schedule",
@@ -555,7 +555,7 @@ describe("setup() daily digest job", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["telegram-daily-digest"]!({
+    await harness.jobs["telegram-daily-digest"]({
       jobKey: "telegram-daily-digest",
       runId: "run-1",
       trigger: "schedule",
@@ -578,7 +578,7 @@ describe("setup() daily digest job", () => {
     );
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["telegram-daily-digest"]!({
+    await harness.jobs["telegram-daily-digest"]({
       jobKey: "telegram-daily-digest",
       runId: "run-2",
       trigger: "schedule",
@@ -598,7 +598,7 @@ describe("setup() daily digest job", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["telegram-daily-digest"]!({
+    await harness.jobs["telegram-daily-digest"]({
       jobKey: "telegram-daily-digest",
       runId: "run-1",
       trigger: "schedule",
@@ -618,7 +618,7 @@ describe("setup() daily digest job", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["telegram-daily-digest"]!({
+    await harness.jobs["telegram-daily-digest"]({
       jobKey: "telegram-daily-digest",
       runId: "run-1",
       trigger: "schedule",
@@ -627,7 +627,7 @@ describe("setup() daily digest job", () => {
 
     const sent = sendMessageCalls(harness.calls);
     expect(sent).toHaveLength(1);
-    expect(String(bodyOf(sent[0]!).text)).toContain("Could not generate digest");
+    expect(String(bodyOf(sent[0]).text)).toContain("Could not generate digest");
     expect(harness.ctx.logger.error).toHaveBeenCalled();
   });
 });
@@ -641,7 +641,7 @@ describe("setup() escalation timeout and watch jobs", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["check-escalation-timeouts"]!({
+    await harness.jobs["check-escalation-timeouts"]({
       jobKey: "check-escalation-timeouts",
       runId: "run-1",
       trigger: "schedule",
@@ -660,7 +660,7 @@ describe("setup() escalation timeout and watch jobs", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["check-escalation-timeouts"]!({
+    await harness.jobs["check-escalation-timeouts"]({
       jobKey: "check-escalation-timeouts",
       runId: "run-1",
       trigger: "schedule",
@@ -679,7 +679,7 @@ describe("setup() escalation timeout and watch jobs", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["check-watches"]!({
+    await harness.jobs["check-watches"]({
       jobKey: "check-watches",
       runId: "run-1",
       trigger: "schedule",
@@ -702,7 +702,7 @@ describe("setup() escalation timeout and watch jobs", () => {
     });
     await plugin.definition.setup(harness.ctx);
 
-    await harness.jobs["check-watches"]!({
+    await harness.jobs["check-watches"]({
       jobKey: "check-watches",
       runId: "run-1",
       trigger: "schedule",

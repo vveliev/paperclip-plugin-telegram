@@ -143,6 +143,12 @@ export async function handleMediaMessage(
           projectId,
         );
       } else {
+        // Marked, not endorsed: `events.emit` is a host RPC returning
+        // Promise<void>, so a rejection here is swallowed and the event
+        // silently never lands — the exact failure shape this plugin keeps
+        // hitting. Awaiting it changes behaviour, so it needs a test that
+        // fails when reintroduced rather than a drive-by fix.
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         ctx.events.emit("acp-spawn", companyId, {
           type: "message",
           sessionId: target.sessionId,
@@ -165,7 +171,7 @@ function extractFileId(msg: TelegramMediaMessage): string | null {
   if (msg.document) return msg.document.file_id;
   if (msg.photo && msg.photo.length > 0) {
     // Use the largest photo
-    return msg.photo.sort((a, b) => b.width * b.height - a.width * a.height)[0]!.file_id;
+    return msg.photo.sort((a, b) => b.width * b.height - a.width * a.height)[0].file_id;
   }
   return null;
 }
