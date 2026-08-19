@@ -56,7 +56,7 @@ describe("handleAcpOutput - chunking (regression: Telegram rejects messages over
     const ctx = mockCtx();
     const longText = "line\n".repeat(1000); // ~5000 chars, well over the 4000-char chunk budget
 
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: longText, done: true });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: longText });
 
     expect(sentMessages.length).toBeGreaterThan(1);
     // No individual chunk may exceed Telegram's hard limit
@@ -70,7 +70,7 @@ describe("handleAcpOutput - chunking (regression: Telegram rejects messages over
     const ctx = mockCtx();
     const shortText = "all good here";
 
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: shortText, done: true });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: shortText });
 
     expect(sentMessages).toHaveLength(1);
   });
@@ -80,7 +80,7 @@ describe("handleAcpOutput - chunking (regression: Telegram rejects messages over
     const ctx = mockCtx();
     const longText = "line\n".repeat(1000);
 
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: longText, done: true });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: longText });
 
     const lastMessageId = nextMessageId - 1;
     expect(stateStore[`agent_msg_chat-1_${lastMessageId}`]).toEqual({ sessionId: "s1" });
@@ -91,12 +91,76 @@ describe("handleAcpOutput - chunking (regression: Telegram rejects messages over
   });
 });
 
+describe("handleAcpOutput - real ACP wire contract (regression: tool_call/tool_result/error events have no `text` field)", () => {
+  it("does not throw and renders tool_call events without a text field", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    await expect(handleAcpOutput(ctx, "token", {
+      sessionId: "s1", type: "tool_call", chatId: "chat-1", threadId: 42,
+      toolName: "bash", toolInput: "ls -la",
+    })).resolves.toBeUndefined();
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].text).toContain("bash");
+    expect(sentMessages[0].text).toContain("ls -la");
+  });
+
+  it("does not throw and renders tool_result events without a text field", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    await expect(handleAcpOutput(ctx, "token", {
+      sessionId: "s1", type: "tool_result", chatId: "chat-1", threadId: 42,
+      toolName: "bash", toolOutput: "file1\nfile2",
+    })).resolves.toBeUndefined();
+
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0].text).toContain("bash");
+    expect(sentMessages[0].text).toContain("file1");
+  });
+
+  it("does not throw and renders error events without a text field, and treats error as terminal", async () => {
+    stateStore["sessions_chat-1_42"] = [
+      activeSession({ sessionId: "s1", agentDisplayName: "Builder" }),
+      activeSession({ sessionId: "s2", agentDisplayName: "Tester" }),
+    ];
+    const ctx = mockCtx();
+
+    // s1 holds the floor without finishing.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "working..." });
+    // s2 queues behind s1.
+    await handleAcpOutput(ctx, "token", { sessionId: "s2", type: "text", chatId: "chat-1", threadId: 42, text: "waiting" });
+
+    await expect(handleAcpOutput(ctx, "token", {
+      sessionId: "s1", type: "error", chatId: "chat-1", threadId: 42, error: "agent crashed",
+    })).resolves.toBeUndefined();
+
+    // The error yields the floor before its own message is sent, so s2's
+    // queued output flushes first (same ordering as a normal `done`).
+    expect(sentMessages[sentMessages.length - 2].text).toContain("waiting");
+    expect(sentMessages[sentMessages.length - 1].text).toContain("agent crashed");
+  });
+
+  it("uses event.text verbatim for done events, and treats done as terminal", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    await handleAcpOutput(ctx, "token", {
+      sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: "Agent exited with code 0",
+    });
+
+    expect(sentMessages[0].text).toContain("Agent exited with code 0");
+    expect(sentMessages[0].text).toContain("✅"); // done emoji renders now that `done` is a real signal
+  });
+});
+
 describe("handleAcpOutput - session bookkeeping", () => {
   it("updates lastActivityAt for the matching session", async () => {
     stateStore["sessions_chat-1_42"] = [activeSession({ lastActivityAt: "2020-01-01T00:00:00Z" })];
     const ctx = mockCtx();
 
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: "hi", done: false });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "hi" });
 
     const sessions = stateStore["sessions_chat-1_42"] as Array<Record<string, unknown>>;
     expect(sessions[0].lastActivityAt).not.toBe("2020-01-01T00:00:00Z");
@@ -104,7 +168,7 @@ describe("handleAcpOutput - session bookkeeping", () => {
 
   it("still sends output under the generic 'Agent' label when the session is unknown", async () => {
     const ctx = mockCtx();
-    await handleAcpOutput(ctx, "token", { sessionId: "unknown-session", chatId: "chat-1", threadId: 42, text: "hi", done: true });
+    await handleAcpOutput(ctx, "token", { sessionId: "unknown-session", type: "done", chatId: "chat-1", threadId: 42, text: "hi" });
 
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0].text).toContain("Agent");
@@ -120,16 +184,16 @@ describe("handleAcpOutput - multi-agent output sequencing (regression: interleav
     const ctx = mockCtx();
 
     // Builder starts speaking (not done yet) — becomes the current speaker.
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: "building...", done: false });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "building..." });
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0].text).toContain("Builder");
 
     // Tester tries to speak while Builder still holds the floor — must be queued, not sent immediately.
-    await handleAcpOutput(ctx, "token", { sessionId: "s2", chatId: "chat-1", threadId: 42, text: "waiting to test", done: false });
+    await handleAcpOutput(ctx, "token", { sessionId: "s2", type: "text", chatId: "chat-1", threadId: 42, text: "waiting to test" });
     expect(sentMessages).toHaveLength(1);
 
     // Builder finishes — this should flush Tester's queued output.
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: "build complete", done: true });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: "build complete" });
 
     expect(sentMessages).toHaveLength(3);
     // The queued Tester output is flushed as soon as Builder yields the floor,
@@ -144,7 +208,7 @@ describe("handleAcpOutput - multi-agent output sequencing (regression: interleav
     stateStore["sessions_chat-1_42"] = [activeSession({ sessionId: "s1" })];
     const ctx = mockCtx();
 
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", chatId: "chat-1", threadId: 42, text: "solo output", done: false });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "solo output" });
 
     expect(sentMessages).toHaveLength(1);
   });
