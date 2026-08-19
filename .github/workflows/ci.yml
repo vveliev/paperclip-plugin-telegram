@@ -18,6 +18,10 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: npm run typecheck
+      # Lint catches what tsc cannot: an un-awaited host RPC, a dropped
+      # rejection. Every defect this plugin has recorded failed silently,
+      # and a type checker is green on all of them.
+      - run: npm run lint
       # test:coverage, not test: it runs the same suite and additionally
       # enforces the coverage ratchet in vitest.config.ts. Plain `npm run test`
       # passes on a change that drops coverage, which is what the ratchet is

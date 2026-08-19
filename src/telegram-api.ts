@@ -214,6 +214,11 @@ export async function isForum(
 export const GENERAL_TOPIC_THREAD_ID = 1;
 
 // MarkdownV2 requires escaping these characters
+// The `\[` is redundant inside a character class, but it is kept so this
+// reads as the literal list Telegram's MarkdownV2 spec publishes. Getting
+// this set wrong corrupts every outbound message, so legibility against the
+// spec wins over the linter's preference here.
+// eslint-disable-next-line no-useless-escape
 const MD_ESCAPE_CHARS = /([_*\[\]()~`>#+\-=|{}.!\\])/g;
 
 export function escapeMarkdownV2(text: string): string {
@@ -229,6 +234,7 @@ export function truncateAtWord(text: string, maxLen: number): string {
 
 function stripMarkdown(text: string): string {
   return text
+    // eslint-disable-next-line no-useless-escape -- mirrors MD_ESCAPE_CHARS above
     .replace(/\\([_*\[\]()~`>#+\-=|{}.!\\])/g, "$1")
     .replace(/[*_`~]/g, "");
 }

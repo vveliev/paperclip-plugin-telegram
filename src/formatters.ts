@@ -198,7 +198,7 @@ export function formatApprovalCreated(event: PluginEvent, opts?: IssueLinksOpts)
 
   // Add deep link to the first linked issue if available
   if (linkedIssues.length > 0) {
-    const firstIssueId = String(linkedIssues[0]!.identifier ?? "");
+    const firstIssueId = String(linkedIssues[0].identifier ?? "");
     if (firstIssueId) {
       const btn = issueButton(firstIssueId, opts);
       if (btn) keyboard.push([btn]);

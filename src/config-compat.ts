@@ -32,12 +32,12 @@ export async function loadStartupConfig<T extends Record<string, unknown>>(
 ): Promise<T> {
   try {
     const rawConfig = await ctx.config.get();
-    return { ...fallback, ...rawConfig } as T;
+    return { ...fallback, ...rawConfig };
   } catch (err) {
     if (fallbackCompanyId) {
       try {
         const scopedConfig = await ctx.config.get(fallbackCompanyId);
-        return { ...fallback, ...scopedConfig } as T;
+        return { ...fallback, ...scopedConfig };
       } catch (scopedErr) {
         logConfigFallback(
           ctx.logger,
@@ -60,7 +60,7 @@ export async function resolveCompatibleConfig<T extends Record<string, unknown>>
 ): Promise<T> {
   try {
     const scopedConfig = await ctx.config.get(companyId ?? undefined);
-    return { ...fallback, ...scopedConfig } as T;
+    return { ...fallback, ...scopedConfig };
   } catch (err) {
     logConfigFallback(
       ctx.logger,
