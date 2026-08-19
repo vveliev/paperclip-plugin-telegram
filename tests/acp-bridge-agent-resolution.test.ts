@@ -30,7 +30,7 @@ function mockCtx(agentsListImpl?: () => Promise<unknown[]>): PluginContext {
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     events: {
-      emit: vi.fn((event: string, companyId: string, payload: unknown) => {
+      emit: vi.fn(async (event: string, companyId: string, payload: unknown) => {
         emittedEvents.push({ event, companyId, payload });
       }),
       on: vi.fn(),
@@ -166,6 +166,27 @@ describe("agent resolution via /acp spawn (regression: ctx.agents.get() requires
       "Native session creation failed, falling back to ACP",
       expect.objectContaining({ agentName: "builder" }),
     );
+  });
+});
+
+// `ctx.events.emit` is a host RPC (Promise<void>). This runs inside
+// handleUpdate's call graph, so an uncaught rejection would wedge Telegram
+// polling for every chat — it must be logged, not left to propagate or drop.
+describe("/acp spawn - events.emit rejection is caught, not dropped or propagated", () => {
+  it("logs and swallows a rejected acp-spawn emit, and still confirms the session to the user", async () => {
+    const ctx = mockCtx(async () => [{ id: "uuid-1", name: "builder", urlKey: "builder" }]);
+    (ctx.events.emit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host RPC unavailable"));
+
+    await expect(spawn(ctx, "nonexistent-agent")).resolves.toBeUndefined();
+
+    const sessions = savedSessions();
+    expect(sessions[0].transport).toBe("acp");
+    expect(ctx.logger.error).toHaveBeenCalledWith(
+      "Failed to emit acp-spawn",
+      expect.objectContaining({ chatId: "chat-1", error: expect.stringContaining("host RPC unavailable") }),
+    );
+    // The rejection must not have aborted handleAcpSpawn(): the user is still told.
+    expect(sentMessages.some((m) => m.text.includes("Agent Session Started"))).toBe(true);
   });
 });
 

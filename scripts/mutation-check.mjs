@@ -229,6 +229,56 @@ const MUTATIONS = [
   }`,
     replace: "",
   },
+  {
+    id: "escalation-resolved-emit-dropped",
+    file: "src/escalation.ts",
+    breaks:
+      "A human answers an escalation and escalation.resolved fails to emit silently — the agent never hears the human answered (BLA-343).",
+    find: `    await ctx.events.emit("escalation.resolved", stored.companyId, {
+      escalationId: stored.escalationId,
+      agentId: stored.agentId,
+      responderId: response.responderId,
+      responseText: response.responseText,
+      action: response.action,
+    }).catch((err: unknown) => {
+      ctx.logger.error("Failed to emit escalation.resolved", {
+        escalationId: stored.escalationId,
+        companyId: stored.companyId,
+        error: String(err),
+      });
+    });`,
+    replace: `    ctx.events.emit("escalation.resolved", stored.companyId, {
+      escalationId: stored.escalationId,
+      agentId: stored.agentId,
+      responderId: response.responderId,
+      responseText: response.responseText,
+      action: response.action,
+    });`,
+  },
+  {
+    id: "escalation-timed-out-emit-dropped",
+    file: "src/escalation.ts",
+    breaks:
+      "An escalation times out and escalation.timed_out fails to emit silently — nothing downstream ever learns the default action fired (BLA-343).",
+    find: `      await ctx.events.emit("escalation.timed_out", stored.companyId, {
+        escalationId,
+        agentId: stored.agentId,
+        defaultAction: stored.defaultAction,
+        suggestedReply: stored.suggestedReply,
+      }).catch((err: unknown) => {
+        ctx.logger.error("Failed to emit escalation.timed_out", {
+          escalationId,
+          companyId: stored.companyId,
+          error: String(err),
+        });
+      });`,
+    replace: `      ctx.events.emit("escalation.timed_out", stored.companyId, {
+        escalationId,
+        agentId: stored.agentId,
+        defaultAction: stored.defaultAction,
+        suggestedReply: stored.suggestedReply,
+      });`,
+  },
 ];
 
 const args = process.argv.slice(2);
