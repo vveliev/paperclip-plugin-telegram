@@ -88,41 +88,45 @@ type HelpGroup = {
 
 // Grouped by task rather than BOT_COMMANDS's flat menu order: a first-time
 // user scanning /help should be able to tell "what do I use for approvals"
-// at a glance, not read 11 undifferentiated lines. Every command in
+// at a glance, not read 13 undifferentiated lines. Every command in
 // BOT_COMMANDS appears in exactly one group here (enforced by a test).
 export const HELP_GROUPS: HelpGroup[] = [
   {
     title: "Daily use",
     entries: [
-      { usage: "/create <task title>", description: "Create a new task (assigned to CEO agent)" },
-      { usage: "/status", description: "Company health: active agents, open issues" },
-      { usage: "/issues [project]", description: "List open issues (optionally by project)" },
-      { usage: "/help", description: "Show available commands" },
+      { usage: "/create <title>", description: "Create a new task for the team" },
+      { usage: "/status", description: "Quick snapshot: active agents and open issues" },
+      { usage: "/issues [project]", description: "List open issues, optionally filtered by project" },
+      { usage: "/help", description: "Show this list of commands" },
     ],
   },
   {
     title: "Approvals",
-    entries: [{ usage: "/approve <approval-id>", description: "Approve a pending request by ID" }],
+    entries: [
+      { usage: "/decisions", description: "List decisions waiting on your input" },
+      { usage: "/approve <id>", description: "Approve a pending request by its ID" },
+    ],
   },
   {
     title: "Agent sessions",
     entries: [
-      { usage: "/acp <spawn|status|cancel|close>", description: "Manage agent sessions" },
-      { usage: "/agents", description: "List agents with current status" },
+      { usage: "/acp <spawn|status|cancel|close>", description: "Start, check, cancel, or close an agent session" },
+      { usage: "/agents", description: "List all agents and what they're doing" },
     ],
   },
   {
     title: "Automation",
     entries: [
-      { usage: "/commands <list|import|run|delete>", description: "Manage custom workflow commands" },
+      { usage: "/commands <list|import|run|delete>", description: "Manage custom commands" },
     ],
   },
   {
     title: "Setup",
     entries: [
-      { usage: "/connect <company-name>", description: "Link this chat to a Paperclip company" },
-      { usage: "/connect_topic <project-name> [topic-id]", description: "Map a project to a forum topic" },
-      { usage: "/topics <list|remove|clear>", description: "List or remove forum topic mappings" },
+      { usage: "/settings", description: "Show connection, routing, and notification settings" },
+      { usage: "/connect <company>", description: "Link this chat to a Paperclip company" },
+      { usage: "/connect_topic <project> [topic-id]", description: "Map a project to this forum topic (forum groups only)" },
+      { usage: "/topics <list|remove|clear>", description: "Manage this chat's forum topic mappings" },
     ],
   },
 ];
