@@ -55,13 +55,12 @@ export default tseslint.config(
       // interface shape, not a defect.
       "@typescript-eslint/require-await": "off",
 
-      // OFF, but this one is real and is tracked separately: 78 sites do
-      // `String(payload.field ?? "")` on `Record<string, unknown>` values
-      // that arrive as JSON. When such a field is an object the user gets
-      // "[object Object]" in a Telegram message. Fixing it means narrowing
-      // payload types at the boundary — a change with its own tests, not a
-      // drive-by in the PR that introduces linting.
-      "@typescript-eslint/no-base-to-string": "off",
+      // `String(payload.field)` on a `Record<string, unknown>` value that
+      // turns out to be an object silently renders "[object Object]" in a
+      // Telegram message. Call sites must go through the `str()` helper in
+      // ./src/coerce.ts, which narrows to primitives and logs+falls back
+      // otherwise.
+      "@typescript-eslint/no-base-to-string": "error",
     },
   },
   {
