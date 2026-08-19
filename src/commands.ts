@@ -11,6 +11,10 @@ type BotCommand = {
   description: string;
 };
 
+// Leaves headroom below Telegram's 4096-char hard limit for /agents so a
+// company with many agents doesn't produce a message the API silently drops.
+const AGENTS_MESSAGE_CHAR_BUDGET = 3500;
+
 // The subset of TelegramConfig /settings reports on. Sourced from the
 // company's resolved plugin config (see worker.ts's effectiveConfig) — these
 // toggles already exist as admin-configured state, so /settings surfaces
@@ -64,6 +68,65 @@ export const BOT_COMMANDS: BotCommand[] = [
   { command: "connect", description: "Link this chat to a Paperclip company" },
   { command: "connect_topic", description: "Map a project to this forum topic (forum groups only)" },
   { command: "topics", description: "List or remove this chat's forum topic mappings" },
+];
+
+type HelpEntry = {
+  // Full invocation grammar, e.g. "/acp <spawn|status|cancel|close>". Inlined
+  // here so a first-time user can see subcommand syntax in /help itself,
+  // instead of needing to already know to invoke the bare parent command
+  // (/acp, /commands, /topics) to discover it.
+  usage: string;
+  description: string;
+};
+
+type HelpGroup = {
+  title: string;
+  entries: HelpEntry[];
+};
+
+// Grouped by task rather than BOT_COMMANDS's flat menu order: a first-time
+// user scanning /help should be able to tell "what do I use for approvals"
+// at a glance, not read 13 undifferentiated lines. Every command in
+// BOT_COMMANDS appears in exactly one group here (enforced by a test).
+export const HELP_GROUPS: HelpGroup[] = [
+  {
+    title: "Daily use",
+    entries: [
+      { usage: "/create <title>", description: "Create a new task for the team" },
+      { usage: "/status", description: "Quick snapshot: active agents and open issues" },
+      { usage: "/issues [project]", description: "List open issues, optionally filtered by project" },
+      { usage: "/help", description: "Show this list of commands" },
+    ],
+  },
+  {
+    title: "Approvals",
+    entries: [
+      { usage: "/decisions", description: "List decisions waiting on your input" },
+      { usage: "/approve <id>", description: "Approve a pending request by its ID" },
+    ],
+  },
+  {
+    title: "Agent sessions",
+    entries: [
+      { usage: "/acp <spawn|status|cancel|close>", description: "Start, check, cancel, or close an agent session" },
+      { usage: "/agents", description: "List all agents and what they're doing" },
+    ],
+  },
+  {
+    title: "Automation",
+    entries: [
+      { usage: "/commands <list|import|run|delete>", description: "Manage custom commands" },
+    ],
+  },
+  {
+    title: "Setup",
+    entries: [
+      { usage: "/settings", description: "Show connection, routing, and notification settings" },
+      { usage: "/connect <company>", description: "Link this chat to a Paperclip company" },
+      { usage: "/connect_topic <project> [topic-id]", description: "Map a project to this forum topic (forum groups only)" },
+      { usage: "/topics <list|remove|clear>", description: "Manage this chat's forum topic mappings" },
+    ],
+  },
 ];
 
 export async function handleCommand(
@@ -300,14 +363,25 @@ async function handleAgents(
     const hasLinks = isExternalUrl(publicUrl);
     const statusEmoji: Record<string, string> = { active: "🟢", error: "🔴", paused: "🟡", idle: "⚪", running: "🔵" };
     const lines = [escapeMarkdownV2("🤖") + " *Agents*", ""];
+    let shown = 0;
     for (const agent of agents) {
       const emoji = statusEmoji[agent.status] ?? "⚪";
-      if (hasLinks) {
-        const url = `${publicUrl}/agents/${agent.id}`;
-        lines.push(`${escapeMarkdownV2(emoji)} [${escapeMarkdownV2(agent.name)}](${url}) \\- ${escapeMarkdownV2(agent.status)}`);
-      } else {
-        lines.push(`${escapeMarkdownV2(emoji)} *${escapeMarkdownV2(agent.name)}* \\- ${escapeMarkdownV2(agent.status)}`);
-      }
+      const line = hasLinks
+        ? `${escapeMarkdownV2(emoji)} [${escapeMarkdownV2(agent.name)}](${publicUrl}/agents/${agent.id}) \\- ${escapeMarkdownV2(agent.status)}`
+        : `${escapeMarkdownV2(emoji)} *${escapeMarkdownV2(agent.name)}* \\- ${escapeMarkdownV2(agent.status)}`;
+
+      // Stop before the message grows past Telegram's 4096-char hard limit,
+      // leaving room for a trailing "and N more" line.
+      const projected = lines.join("\n").length + 1 + line.length;
+      if (shown > 0 && projected > AGENTS_MESSAGE_CHAR_BUDGET) break;
+
+      lines.push(line);
+      shown++;
+    }
+
+    const remaining = agents.length - shown;
+    if (remaining > 0) {
+      lines.push("", escapeMarkdownV2(`…and ${remaining} more`));
     }
 
     await sendMessage(ctx, token, chatId, lines.join("\n"), {
@@ -379,13 +453,18 @@ async function handleHelp(
   chatId: string,
   messageThreadId?: number,
 ): Promise<void> {
-  const lines = [
-    escapeMarkdownV2("📎") + " *Paperclip Bot Commands*",
-    "",
-    ...BOT_COMMANDS.map(
-      (cmd) => `/${escapeMarkdownV2(cmd.command)} \\- ${escapeMarkdownV2(cmd.description)}`,
-    ),
-  ];
+  const lines = [escapeMarkdownV2("📎") + " *Paperclip Bot Commands*"];
+
+  for (const group of HELP_GROUPS) {
+    lines.push("");
+    lines.push(`*${escapeMarkdownV2(group.title)}*`);
+    for (const entry of group.entries) {
+      lines.push(`${escapeMarkdownV2(entry.usage)} \\- ${escapeMarkdownV2(entry.description)}`);
+    }
+  }
+
+  lines.push("");
+  lines.push(escapeMarkdownV2("Run a command with no arguments (e.g. /acp) to see its full usage."));
 
   await sendMessage(ctx, token, chatId, lines.join("\n"), {
     parseMode: "MarkdownV2",
