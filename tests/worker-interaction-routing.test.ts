@@ -7,12 +7,12 @@ let finalizeCalls: unknown[][] = [];
 let stateStore: Record<string, unknown> = {};
 
 vi.mock("@paperclipai/plugin-sdk", async () => {
-  const actual = await vi.importActual("@paperclipai/plugin-sdk") as Record<string, unknown>;
+  const actual = await vi.importActual("@paperclipai/plugin-sdk");
   return { ...actual, runWorker: vi.fn() };
 });
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, text: string) => {
@@ -24,7 +24,7 @@ vi.mock("../src/telegram-api.js", async () => {
 });
 
 vi.mock("../src/interaction-answers.js", async () => {
-  const actual = await vi.importActual("../src/interaction-answers.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/interaction-answers.js");
   return {
     ...actual,
     resolveInteractionAnswerCallback: vi.fn(async (...args: unknown[]) => {
@@ -88,7 +88,7 @@ describe("handleUpdate — interaction-answer callback routing", () => {
     await handleUpdate(ctx, "token", config, update, baseUrl);
 
     expect(resolveCalls).toHaveLength(1);
-    const [, , data, callbackQueryId, , , messageId] = resolveCalls[0]!;
+    const [, , data, callbackQueryId, , , messageId] = resolveCalls[0];
     expect(data).toBe("int_abc123_accept");
     expect(callbackQueryId).toBe("cbq-1");
     expect(messageId).toBe(5);
@@ -120,7 +120,7 @@ describe("handleUpdate — reply-to-reject routing", () => {
     await handleUpdate(ctx, "token", config, update, baseUrl);
 
     expect(finalizeCalls).toHaveLength(1);
-    const [, , , , mapping, reasonText, chatId] = finalizeCalls[0]!;
+    const [, , , , mapping, reasonText, chatId] = finalizeCalls[0];
     expect(mapping).toMatchObject({ entityId: "int-1", issueId: "issue-1" });
     expect(reasonText).toBe("not ready for prod");
     expect(chatId).toBe("777");

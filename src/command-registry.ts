@@ -363,7 +363,7 @@ async function executeWorkflow(
   const results: StepResult[] = [...priorResults];
 
   for (let index = startIndex; index < cmd.steps.length; index++) {
-    const step = cmd.steps[index]!;
+    const step = cmd.steps[index];
     try {
       const result = await executeStep(ctx, token, chatId, step, args, results, messageThreadId, companyId);
 
@@ -425,12 +425,12 @@ async function executeStep(
     let result = template;
     // Replace {{arg0}}, {{arg1}}, etc.
     for (let i = 0; i < args.length; i++) {
-      result = result.replace(new RegExp(`\\{\\{arg${i}\\}\\}`, "g"), args[i]!);
+      result = result.replace(new RegExp(`\\{\\{arg${i}\\}\\}`, "g"), args[i]);
     }
     result = result.replace(/\{\{args\}\}/g, args.join(" "));
     // Replace {{prev.result}}, {{step_id.result}}
     if (prevResults.length > 0) {
-      const lastResult = prevResults[prevResults.length - 1]!;
+      const lastResult = prevResults[prevResults.length - 1];
       result = result.replace(/\{\{prev\.result\}\}/g, lastResult.result);
     }
     for (const prev of prevResults) {

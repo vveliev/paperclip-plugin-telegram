@@ -167,7 +167,7 @@ function extractFileId(msg: TelegramMediaMessage): string | null {
   if (msg.document) return msg.document.file_id;
   if (msg.photo && msg.photo.length > 0) {
     // Use the largest photo
-    return msg.photo.sort((a, b) => b.width * b.height - a.width * a.height)[0]!.file_id;
+    return msg.photo.sort((a, b) => b.width * b.height - a.width * a.height)[0].file_id;
   }
   return null;
 }

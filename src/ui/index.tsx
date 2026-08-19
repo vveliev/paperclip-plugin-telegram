@@ -1179,7 +1179,7 @@ export function TelegramSettingsPage({ context }: PluginSettingsPageProps): Reac
         paperclipBoardApiTokenRef: secret.id,
         identity: nextIdentity,
       });
-      await boardAccess.refresh();
+      boardAccess.refresh();
 
       setNotice({
         tone: "success",

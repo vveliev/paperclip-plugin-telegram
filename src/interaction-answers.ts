@@ -212,7 +212,7 @@ async function sendAskUserQuestionsPrompt(
     selectedOptionIds: [],
   });
 
-  const question = opts.payload.questions[0]!;
+  const question = opts.payload.questions[0];
   await sendMessage(ctx, token, chatId, renderQuestionText(question, 0, opts.payload.questions.length), {
     parseMode: "MarkdownV2",
     messageThreadId: opts.messageThreadId,
@@ -266,7 +266,7 @@ async function sendRequestConfirmationPrompt(
 
   const buttons = [[{ text: opts.payload.acceptLabel ?? "✅ Accept", callback_data: `${CALLBACK_PREFIX}${key}_accept` }]];
   if (!opts.payload.rejectRequiresReason) {
-    buttons[0]!.push({ text: opts.payload.rejectLabel ?? "❌ Reject", callback_data: `${CALLBACK_PREFIX}${key}_reject` });
+    buttons[0].push({ text: opts.payload.rejectLabel ?? "❌ Reject", callback_data: `${CALLBACK_PREFIX}${key}_reject` });
   }
 
   const messageId = await sendMessage(ctx, token, chatId, renderConfirmationText(opts.payload), {
@@ -425,7 +425,7 @@ async function advanceAskUserQuestions(
 
   const next: ParkedAskUserQuestions = { ...parked, answers, questionIndex: nextIndex, selectedOptionIds: [] };
   await saveParked(ctx, key, next);
-  const question = parked.questions[nextIndex]!;
+  const question = parked.questions[nextIndex];
   await sendMessage(ctx, token, parked.chatId, renderQuestionText(question, nextIndex, parked.questions.length), {
     parseMode: "MarkdownV2",
     messageThreadId: parked.messageThreadId,

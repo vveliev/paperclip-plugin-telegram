@@ -178,7 +178,7 @@ describe("fetchAttention", () => {
 
     const { items } = await fetchAttention(makeCtx(), "http://x", "c1", "tok");
 
-    expect(items[0]!.verbs).toEqual([]);
+    expect(items[0].verbs).toEqual([]);
   });
 });
 
@@ -257,8 +257,8 @@ describe("sendAttentionList — inline answering (BLA-154)", () => {
 
     expect(sent[0]).not.toContain("https://paperclip.example/BLA/issues/BLA-134");
     expect(answerableSendCalls).toHaveLength(1);
-    expect(answerableSendCalls[0]!.chatId).toBe("chat-1");
-    expect(answerableSendCalls[0]!.opts).toMatchObject({ issueId: "issue-134", companyId: "co-1" });
+    expect(answerableSendCalls[0].chatId).toBe("chat-1");
+    expect(answerableSendCalls[0].opts).toMatchObject({ issueId: "issue-134", companyId: "co-1" });
   });
 
   it("keeps the Open link and does not send a prompt when a question has a free-text option", async () => {
@@ -313,7 +313,7 @@ describe("sendAttentionList — inline answering (BLA-154)", () => {
 
     expect(sent[0]).not.toContain("https://paperclip.example/BLA/issues/BLA-134");
     expect(answerableSendCalls).toHaveLength(1);
-    expect(answerableSendCalls[0]!.interaction).toMatchObject({ kind: "request_confirmation" });
+    expect(answerableSendCalls[0].interaction).toMatchObject({ kind: "request_confirmation" });
   });
 
   it("keeps the Open link for an interaction that was answered since the feed was read", async () => {
