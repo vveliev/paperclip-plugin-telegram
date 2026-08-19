@@ -1,12 +1,24 @@
-name: Publish to npm
+# Publishes THIS FORK as @vveliev/paperclip-plugin-telegram.
+#
+# It cannot publish `paperclip-plugin-telegram` — that name belongs to
+# upstream (mvanhorn) on npm. Before this change the workflow targeted that
+# name from our fork on pushes to `main`, which could only ever fail at auth.
+#
+# The npm package name and the PLUGIN ID are deliberately different: the id
+# stays "paperclip-plugin-telegram" because it keys the host's config, state
+# and secret bindings. See src/constants.ts.
+name: Publish prerelease to npm
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [prerelease]
     paths:
       - "src/**"
       - "package.json"
+
+permissions:
+  contents: read
 
 jobs:
   publish:
@@ -21,13 +33,28 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
       - run: npm ci
+
+      # Publishing runs the same gates as CI. `push` to prerelease also
+      # triggers ci.yml, but that is a SEPARATE workflow — nothing makes this
+      # job wait for it, so a broken build would otherwise publish while CI
+      # was still going red next to it.
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:coverage
       - run: npm run build
-      - run: |
+
+      - name: Publish if this version is new
+        env:
+          # Repository secret. Without it `npm publish` fails at auth — which
+          # is exactly how the previous version of this workflow was inert.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
           VERSION=$(node -p "require('./package.json').version")
           NAME=$(node -p "require('./package.json').name")
-          if npm view "${NAME}@${VERSION}" version 2>/dev/null; then
+          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
             echo "Version ${VERSION} already published, skipping."
-          else
-            npm publish --provenance --access public
+            exit 0
           fi
-
+          # --tag prerelease, NOT latest: a bare `npm install` of this package
+          # must not silently pick up a prerelease build.
+          npm publish --provenance --access public --tag prerelease

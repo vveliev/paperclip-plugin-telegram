@@ -1,3 +1,10 @@
+// DO NOT "fix" this to match package.json's name. The npm package is
+// published from this fork as @vveliev/paperclip-plugin-telegram, but the
+// PLUGIN ID is the key the host stores config, state and — critically —
+// secret BINDINGS under. Changing it orphans the installed plugin's board
+// token and every linked chat, and the failure is silent: the plugin loads,
+// reads empty config, and simply stops polling. The two names are
+// deliberately decoupled.
 export const PLUGIN_ID = "paperclip-plugin-telegram";
 export const PLUGIN_VERSION = "0.8.0";
 export const MAX_AGENTS_PER_THREAD = 5;
