@@ -29,7 +29,7 @@ function mockCtx(): PluginContext {
       }),
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    events: { emit: vi.fn((e: string, c: string, p: unknown) => emittedEvents.push({ event: e, companyId: c, payload: p })), on: vi.fn() },
+    events: { emit: vi.fn(async (e: string, c: string, p: unknown) => { emittedEvents.push({ event: e, companyId: c, payload: p }); }), on: vi.fn() },
     agents: {
       get: vi.fn(),
       list: vi.fn().mockResolvedValue([]),
@@ -114,6 +114,40 @@ describe("/acp cancel", () => {
     await expect(handleAcpCommand(ctx, "token", "chat-1", "cancel", 42, "company-1")).resolves.toBeUndefined();
     expect(ctx.logger.error).toHaveBeenCalledWith("Failed to close native session", expect.anything());
     expect(sentMessages.some((m) => m.text.includes("Cancellation requested"))).toBe(true);
+  });
+});
+
+// `ctx.events.emit` is a host RPC (Promise<void>). This runs inside
+// handleUpdate's call graph, so an uncaught rejection would wedge Telegram
+// polling for every chat — it must be logged, not left to propagate or drop.
+describe("/acp cancel / close - events.emit rejection is caught, not dropped or propagated", () => {
+  it("logs and swallows a rejected acp-spawn cancel emit, and still answers the user", async () => {
+    stateStore["sessions_chat-1_42"] = [session({ transport: "acp" })];
+    const ctx = mockCtx();
+    (ctx.events.emit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host RPC unavailable"));
+
+    await expect(handleAcpCommand(ctx, "token", "chat-1", "cancel", 42, "company-1")).resolves.toBeUndefined();
+
+    expect(ctx.logger.error).toHaveBeenCalledWith(
+      "Failed to emit acp-spawn cancel",
+      expect.objectContaining({ sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
+    );
+    expect(sentMessages.some((m) => m.text.includes("Cancellation requested"))).toBe(true);
+  });
+
+  it("logs and swallows a rejected acp-spawn close emit, and still marks the session closed", async () => {
+    stateStore["sessions_chat-1_42"] = [session({ transport: "acp" })];
+    const ctx = mockCtx();
+    (ctx.events.emit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host RPC unavailable"));
+
+    await expect(handleAcpCommand(ctx, "token", "chat-1", "close", 42, "company-1")).resolves.toBeUndefined();
+
+    expect(ctx.logger.error).toHaveBeenCalledWith(
+      "Failed to emit acp-spawn close",
+      expect.objectContaining({ sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
+    );
+    const sessions = stateStore["sessions_chat-1_42"] as Array<Record<string, unknown>>;
+    expect(sessions[0].status).toBe("closed");
   });
 });
 
