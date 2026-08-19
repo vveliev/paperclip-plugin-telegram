@@ -74,7 +74,7 @@ function seedLoop() {
   };
 }
 
-const outputEvent = { sessionId: "s1", chatId: "chat-1", threadId: 42, text: "your turn", done: false };
+const outputEvent = { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "your turn" };
 
 /** The company id every ACP_SPAWN_EVENT was emitted with. */
 function emittedCompanyIds(ctx: PluginContext): unknown[] {

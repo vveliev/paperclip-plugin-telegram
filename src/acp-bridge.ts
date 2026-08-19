@@ -24,13 +24,41 @@ export type ChatSession = {
   lastActivityAt: string;
 };
 
+// Wire contract set by the upstream ACP bridge plugin (paperclip-plugin-acp,
+// src/types.ts) — `type` is the actual discriminant; `text` is only present
+// on "text" and "done" events, never on "tool_call"/"tool_result"/"error".
+// `chatId`/`threadId` are added by the cross-plugin wrapper (worker.ts) and
+// pass through this plugin unchanged.
 type AcpOutputEvent = {
   sessionId: string;
   chatId: string;
   threadId: number;
-  text: string;
-  done?: boolean;
+  type: "text" | "tool_call" | "tool_result" | "error" | "done";
+  text?: string;
+  toolName?: string;
+  toolInput?: string;
+  toolOutput?: string;
+  error?: string;
 };
+
+// There is no `done: boolean` on the wire — only `type: "done"` (and
+// "error", which likewise ends the turn). Derive a display string per
+// event type since only "text"/"done" carry one directly.
+function formatAcpOutputEvent(event: AcpOutputEvent): { text: string; done: boolean } {
+  switch (event.type) {
+    case "tool_call":
+      return { text: `🔧 ${event.toolName ?? "tool"}(${event.toolInput ?? ""})`, done: false };
+    case "tool_result":
+      return { text: `↩ ${event.toolName ?? "tool"} → ${event.toolOutput ?? ""}`, done: false };
+    case "error":
+      return { text: `⚠️ ${event.error ?? "Unknown error"}`, done: true };
+    case "done":
+      return { text: event.text ?? "Agent finished", done: true };
+    case "text":
+    default:
+      return { text: event.text ?? "", done: false };
+  }
+}
 
 type ConversationLoop = {
   loopId: string;
@@ -745,7 +773,8 @@ export async function handleAcpOutput(
   event: AcpOutputEvent,
   companyId?: string,
 ): Promise<void> {
-  const { sessionId, chatId, threadId, text, done } = event;
+  const { sessionId, chatId, threadId } = event;
+  const { text, done } = formatAcpOutputEvent(event);
 
   const sessions = await getSessions(ctx, chatId, threadId);
   const session = sessions.find((s) => s.sessionId === sessionId);
