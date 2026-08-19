@@ -1,0 +1,18 @@
+{
+  // `tsconfig.json` is the BUILD config: its `rootDir: ./src` is what keeps
+  // `dist` flat, so tests cannot be added to it without changing the shape of
+  // the published package. Type-aware lint rules still need every file they
+  // check to belong to a TypeScript project, so this config exists purely to
+  // widen that net — it emits nothing.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "tests/**/*.ts",
+    "vitest.config.ts"
+  ]
+}

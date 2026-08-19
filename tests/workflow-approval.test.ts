@@ -7,7 +7,7 @@ let answeredCallbacks: string[] = [];
 let stateStore: Record<string, unknown> = {};
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (_c: unknown, _t: string, chatId: string, text: string, options?: Record<string, unknown>) => {
@@ -74,7 +74,7 @@ function seedCommand(companyId = "co-1") {
 function approvalIdFromButtons(): string {
   const withButtons = sentMessages.find((m) => m.options?.inlineKeyboard);
   const kb = withButtons!.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>;
-  return kb[0]![0]!.callback_data.replace("cmd_approve_", "");
+  return kb[0][0].callback_data.replace("cmd_approve_", "");
 }
 
 beforeEach(() => {
@@ -104,7 +104,7 @@ describe("wait_approval gate", () => {
 
     const gate = sentMessages.find((m) => m.text === "Ship it?");
     const kb = gate!.options!.inlineKeyboard as Array<Array<{ text: string; callback_data: string }>>;
-    expect(kb[0]!.map((b) => b.text)).toEqual(["Approve", "Reject"]);
+    expect(kb[0].map((b) => b.text)).toEqual(["Approve", "Reject"]);
   });
 
   it("keeps callback_data within Telegram's 64-byte limit", async () => {
@@ -117,7 +117,7 @@ describe("wait_approval gate", () => {
 
     const gate = sentMessages.find((m) => m.options?.inlineKeyboard);
     const kb = gate!.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>;
-    for (const button of kb[0]!) {
+    for (const button of kb[0]) {
       expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
     }
   });
@@ -201,7 +201,7 @@ describe("wait_approval gate", () => {
 
     await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-1", "vagif", 55);
 
-    expect(editedMessages[0]!.text).toContain("vagif");
+    expect(editedMessages[0].text).toContain("vagif");
   });
 
   it("gives each gate in a run a distinct id", async () => {
@@ -222,7 +222,7 @@ describe("wait_approval gate", () => {
 
     const ids = sentMessages
       .filter((m) => m.options?.inlineKeyboard)
-      .map((m) => (m.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>)[0]![0]!.callback_data);
+      .map((m) => (m.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>)[0][0].callback_data);
     expect(new Set(ids).size).toBe(ids.length);
   });
 });

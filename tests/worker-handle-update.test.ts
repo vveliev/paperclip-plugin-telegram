@@ -13,12 +13,12 @@ let handoffApprovalCalls: Array<unknown[]> = [];
 let handoffRejectionCalls: Array<unknown[]> = [];
 
 vi.mock("@paperclipai/plugin-sdk", async () => {
-  const actual = await vi.importActual("@paperclipai/plugin-sdk") as Record<string, unknown>;
+  const actual = await vi.importActual("@paperclipai/plugin-sdk");
   return { ...actual, runWorker: vi.fn() };
 });
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, text: string) => {
@@ -38,7 +38,7 @@ vi.mock("../src/telegram-api.js", async () => {
 });
 
 vi.mock("../src/commands.js", async () => {
-  const actual = await vi.importActual("../src/commands.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/commands.js");
   return {
     ...actual,
     handleCommand: vi.fn(async (...args: unknown[]) => {
@@ -48,7 +48,7 @@ vi.mock("../src/commands.js", async () => {
 });
 
 vi.mock("../src/command-registry.js", async () => {
-  const actual = await vi.importActual("../src/command-registry.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/command-registry.js");
   return {
     ...actual,
     tryCustomCommand: vi.fn(async () => tryCustomCommandResult),
@@ -57,7 +57,7 @@ vi.mock("../src/command-registry.js", async () => {
 });
 
 vi.mock("../src/acp-bridge.js", async () => {
-  const actual = await vi.importActual("../src/acp-bridge.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/acp-bridge.js");
   return {
     ...actual,
     routeMessageToAgent: vi.fn(async (...args: unknown[]) => {
@@ -78,7 +78,7 @@ let handleMediaMessageCalls: Array<unknown[]> = [];
 let handleMediaMessageResult = false;
 
 vi.mock("../src/media-pipeline.js", async () => {
-  const actual = await vi.importActual("../src/media-pipeline.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/media-pipeline.js");
   return {
     ...actual,
     handleMediaMessage: vi.fn(async (...args: unknown[]) => {
@@ -91,7 +91,7 @@ vi.mock("../src/media-pipeline.js", async () => {
 let escalationRespondCalls: Array<unknown[]> = [];
 
 vi.mock("../src/escalation.js", async () => {
-  const actual = await vi.importActual("../src/escalation.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/escalation.js");
   return {
     ...actual,
     EscalationManager: vi.fn().mockImplementation(() => ({
@@ -293,7 +293,7 @@ describe("handleUpdate - callback query dispatch", () => {
   });
 
   it("answers with the failure reason when the approval API call fails, rather than throwing", async () => {
-    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" }) as unknown as typeof fetch;
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "boom" });
     const ctx = mockCtx();
 
     await expect(

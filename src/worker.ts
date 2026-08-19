@@ -4,7 +4,6 @@ import {
   type PluginContext,
   type PluginEvent,
   type PluginHealthDiagnostics,
-  type Agent,
   type Issue,
 } from "@paperclipai/plugin-sdk";
 import {
@@ -304,9 +303,17 @@ export async function resolveBoardApiToken(
     if (seen.has(candidate.ref)) continue;
     seen.add(candidate.ref);
     try {
-      const normalizedRef = normalizeSecretRef(candidate.ref);
-      if (!normalizedRef) continue;
-      return await ctx.secrets.resolve(normalizedRef as string, {
+      // The board-access state persists a bare UUID, which hosts requiring the
+      // object form reject outright — surfacing to the user as an unexplained
+      // 403 from whatever needed the token.
+      const ref = normalizeSecretRef(candidate.ref);
+      if (!ref) {
+        ctx.logger.warn("Board API token ref is not a usable secret reference", {
+          source: candidate.source,
+        });
+        continue;
+      }
+      return await ctx.secrets.resolve(ref, {
         companyId: companyId ?? undefined,
         configPath: candidate.source === "config" ? "paperclipBoardApiTokenRef" : undefined,
       });
@@ -562,7 +569,7 @@ async function identifyDeliveredCompany(
   }
 
   if (readable.length === 0) return null;
-  if (readable.length === 1) return readable[0]!.id;
+  if (readable.length === 1) return readable[0].id;
 
   // A host that answers for several companies is not telling us which one was
   // saved; match the delivered bot-token reference against the readable rows.
@@ -575,7 +582,7 @@ async function identifyDeliveredCompany(
       const rowRef = normalizeSecretRef(row.config.telegramBotTokenRef);
       return rowRef && typeof rowRef === "object" && rowRef.secretId === deliveredSecretId;
     });
-    if (matches.length === 1) return matches[0]!.id;
+    if (matches.length === 1) return matches[0].id;
     ctx.logger.warn("Telegram plugin refused ambiguous configuration delivery attribution", {
       deliveredSecretId,
       matchingCompanyIds: matches.map((row) => row.id),
@@ -1118,7 +1125,7 @@ export const plugin = definePlugin({
           const companyLabel = company.name ? ` \\- ${escapeMarkdownV2(company.name)}` : "";
           const digestLabel = effectiveDigestMode === "bidaily" ? "Digest" : "Daily Digest";
           const lines = [
-            escapeMarkdownV2("📊") + ` *${escapeMarkdownV2(digestLabel)}${companyLabel} \\- ${escapeMarkdownV2(dateStr!)}*`,
+            escapeMarkdownV2("📊") + ` *${escapeMarkdownV2(digestLabel)}${companyLabel} \\- ${escapeMarkdownV2(dateStr)}*`,
             "",
             `${escapeMarkdownV2("✅")} Tasks completed: *${completedToday.length}*`,
             `${escapeMarkdownV2("📋")} Tasks created: *${createdToday.length}*`,
@@ -1130,7 +1137,7 @@ export const plugin = definePlugin({
           // filter above found nothing; do not resurrect it as a claim the data
           // cannot support.
           if (workingAgents.length > 0) {
-            const workingAgent = workingAgents[0]!.name;
+            const workingAgent = workingAgents[0].name;
             lines.push(`${escapeMarkdownV2("⭐")} Working: *${escapeMarkdownV2(workingAgent)}*`);
           }
 
@@ -1431,7 +1438,7 @@ export const plugin = definePlugin({
     if (allowlistErrors.length > 0) {
       return { ok: false, errors: allowlistErrors };
     }
-    const topicErrors = validateConfiguredTopicIds(config as Record<string, unknown>);
+    const topicErrors = validateConfiguredTopicIds(config);
     if (topicErrors.length > 0) {
       return { ok: false, errors: topicErrors };
     }
@@ -1450,7 +1457,6 @@ export async function handleUpdate(
   update: TelegramUpdate,
   baseUrl: string,
   publicUrl?: string,
-  boardApiToken?: string,
 ): Promise<void> {
   if (!isTelegramUpdateAllowed(config, update)) {
     const fromId = update.message?.from?.id ?? update.callback_query?.from.id;
@@ -1481,7 +1487,7 @@ export async function handleUpdate(
   if (hasMedia) {
     const companyId = await resolveCompanyIdOrNull(ctx, chatId);
     if (companyId) {
-      const handled = await handleMediaMessage(ctx, token, msg as Parameters<typeof handleMediaMessage>[2], {
+      const handled = await handleMediaMessage(ctx, token, msg, {
         briefAgentId: config.briefAgentId ?? "",
         briefAgentChatIds: config.briefAgentChatIds ?? [],
         transcriptionApiKeyRef: config.transcriptionApiKeyRef ?? "",

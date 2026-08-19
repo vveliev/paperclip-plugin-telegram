@@ -1,4 +1,4 @@
-import type { PluginContext, AgentSessionEvent } from "@paperclipai/plugin-sdk";
+import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { truncateAtWord } from "./telegram-api.js";
 import { resolveMappedProjectIdForTopic } from "./topic-projects.js";
@@ -166,6 +166,11 @@ async function resolveAgentByName(
   try {
     const allAgents = await ctx.agents.list({ companyId });
     const lower = name.toLowerCase();
+    // Deliberately untyped: the agent record's id field has moved between
+    // SDK versions (agentId / _id / id), so this probes for whichever one
+    // this host actually returns. Typing it to one shape would make the
+    // lookup silently miss on the others.
+    /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
     const match = (allAgents as any[]).find(
       (a: any) =>
         a.name?.toLowerCase() === lower ||
@@ -186,6 +191,7 @@ async function resolveAgentByName(
     });
 
     return { id: resolvedId, name: match.name };
+    /* eslint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call */
   } catch (err) {
     ctx.logger.error("Failed to resolve agent by name", { agentName: name, companyId, error: String(err) });
     return null;
@@ -343,6 +349,12 @@ async function handleAcpSpawn(
 
   if (transport === "acp") {
     // Emit ACP spawn event - companyId is SECOND arg
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "spawn",
       sessionId,
@@ -453,7 +465,7 @@ async function handleAcpCancel(
   // Cancel the most recently active session
   const target = activeSessions.sort(
     (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime(),
-  )[0]!;
+  )[0];
 
   const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
   if (!resolvedCompanyId) {
@@ -468,6 +480,12 @@ async function handleAcpCancel(
       ctx.logger.error("Failed to close native session", { error: String(err) });
     }
   } else {
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "cancel",
       sessionId: target.sessionId,
@@ -553,6 +571,12 @@ async function handleAcpClose(
       ctx.logger.error("Failed to close native session", { error: String(err) });
     }
   } else {
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "close",
       sessionId: targetSession.sessionId,
@@ -562,9 +586,9 @@ async function handleAcpClose(
   }
 
   // Mark closed
-  const idx = sessions.findIndex((s) => s.sessionId === targetSession!.sessionId);
+  const idx = sessions.findIndex((s) => s.sessionId === targetSession.sessionId);
   if (idx >= 0) {
-    sessions[idx]!.status = "closed";
+    sessions[idx].status = "closed";
   }
   await saveSessions(ctx, chatId, messageThreadId, sessions);
 
@@ -606,7 +630,7 @@ export async function routeMessageToAgent(
   // 1) Check for @mention
   const mentionMatch = text.match(/@(\w+)/);
   if (mentionMatch) {
-    const mentionName = mentionMatch[1]!.toLowerCase();
+    const mentionName = mentionMatch[1].toLowerCase();
     targetSession = activeSessions.find(
       (s) => s.agentName.toLowerCase() === mentionName || s.agentDisplayName.toLowerCase() === mentionName,
     );
@@ -638,7 +662,7 @@ export async function routeMessageToAgent(
 
   // Update last activity
   targetSession.lastActivityAt = new Date().toISOString();
-  const idx = sessions.findIndex((s) => s.sessionId === targetSession!.sessionId);
+  const idx = sessions.findIndex((s) => s.sessionId === targetSession.sessionId);
   if (idx >= 0) {
     sessions[idx] = targetSession;
   }
@@ -672,6 +696,12 @@ export async function routeMessageToAgent(
     }
   } else {
     // ACP transport - emit event, companyId is SECOND arg
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
       type: "message",
       sessionId: targetSession.sessionId,
@@ -798,7 +828,7 @@ async function flushOutputQueue(
 
   if (queue.length === 0) return;
 
-  const firstEntry = queue[0]!;
+  const firstEntry = queue[0];
   const nextSpeaker = firstEntry.sessionId;
 
   await ctx.state.set(
@@ -872,12 +902,6 @@ async function sendLabeledOutput(
   text: string,
   done?: boolean,
 ): Promise<void> {
-  const prefix = done
-    ? escapeMarkdownV2("\u2705")
-    : escapeMarkdownV2("\ud83e\udd16");
-
-  const label = `*\\[${escapeMarkdownV2(displayName)}\\]*`;
-
   // Split long text into chunks to stay within Telegram's 4096 char limit
   const chunks: string[] = [];
   if (text.length <= TELEGRAM_MAX_LENGTH) {
@@ -902,7 +926,7 @@ async function sendLabeledOutput(
     // Convert agent Markdown to Telegram HTML for proper rendering
     const doneEmoji = done ? "\u2705" : "\ud83e\udd16";
     const chunkPrefix = `${doneEmoji} <b>[${escapeHtml(displayName)}]</b> `;
-    const formatted = `${chunkPrefix}${markdownToTelegramHtml(chunks[i]!)}`;
+    const formatted = `${chunkPrefix}${markdownToTelegramHtml(chunks[i])}`;
 
     const messageId = await sendMessage(ctx, token, chatId, formatted, {
       parseMode: "HTML",
@@ -997,9 +1021,9 @@ export async function handleHandoffApproval(
   token: string,
   handoffId: string,
   actor: string,
-  callbackQueryId: string,
-  chatId: string | null,
-  messageId: number | undefined,
+  _callbackQueryId: string,
+  _chatId: string | null,
+  _messageId: number | undefined,
 ): Promise<void> {
   const pending = await ctx.state.get({
     scopeKind: "instance",
@@ -1024,9 +1048,9 @@ export async function handleHandoffRejection(
   token: string,
   handoffId: string,
   actor: string,
-  callbackQueryId: string,
-  chatId: string | null,
-  messageId: number | undefined,
+  _callbackQueryId: string,
+  _chatId: string | null,
+  _messageId: number | undefined,
 ): Promise<void> {
   const pending = await ctx.state.get({
     scopeKind: "instance",
@@ -1110,6 +1134,12 @@ async function executeHandoff(
     await saveSessions(ctx, chatId, threadId, sessions);
 
     if (transport === "acp") {
+      // Marked, not endorsed: `events.emit` is a host RPC returning
+      // Promise<void>, so a rejection here is swallowed and the event
+      // silently never lands — the exact failure shape this plugin keeps
+      // hitting. Awaiting it changes behaviour, so it needs a test that
+      // fails when reintroduced rather than a drive-by fix.
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
         type: "spawn",
         sessionId,
@@ -1138,6 +1168,12 @@ async function executeHandoff(
       "handoff",
     );
   } else {
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
       type: "message",
       sessionId: targetSession.sessionId,
@@ -1221,6 +1257,12 @@ export async function handleDiscussToolCall(
     await saveSessions(ctx, chatId, threadId, sessions);
 
     if (transport === "acp") {
+      // Marked, not endorsed: `events.emit` is a host RPC returning
+      // Promise<void>, so a rejection here is swallowed and the event
+      // silently never lands — the exact failure shape this plugin keeps
+      // hitting. Awaiting it changes behaviour, so it needs a test that
+      // fails when reintroduced rather than a drive-by fix.
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
         type: "spawn",
         sessionId,
@@ -1288,6 +1330,12 @@ export async function handleDiscussToolCall(
       "discussion",
     );
   } else {
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit(ACP_SPAWN_EVENT, companyId, {
       type: "message",
       sessionId: targetSession.sessionId,
@@ -1419,6 +1467,12 @@ async function checkConversationLoopContinuation(
           "discussion_turn",
         );
       } else {
+        // Marked, not endorsed: `events.emit` is a host RPC returning
+        // Promise<void>, so a rejection here is swallowed and the event
+        // silently never lands — the exact failure shape this plugin keeps
+        // hitting. Awaiting it changes behaviour, so it needs a test that
+        // fails when reintroduced rather than a drive-by fix.
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         ctx.events.emit(ACP_SPAWN_EVENT, resolvedCompanyId, {
           type: "message",
           sessionId: nextSessionId,

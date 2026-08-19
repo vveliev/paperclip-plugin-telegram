@@ -14,7 +14,7 @@ let freshInteractions: Array<{ id: string; status: string; kind: string }> = [];
 let postResponses: Record<string, { status: string }> = {};
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, text: string, options?: Record<string, unknown>) => {
@@ -84,7 +84,7 @@ beforeEach(() => {
 
 function lastCallbackData(): string {
   const keyboard = sent.at(-1)?.options?.inlineKeyboard as Array<Array<{ callback_data: string }>>;
-  return keyboard[0]![0]!.callback_data;
+  return keyboard[0][0].callback_data;
 }
 
 function pickSafeQuestion(over: Record<string, unknown> = {}) {
@@ -138,8 +138,8 @@ describe("sendAnswerableInteraction — ask_user_questions", () => {
 
     expect(ok).toBe(true);
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.text).toContain("Question 1 of 1");
-    const keyboard = sent[0]!.options!.inlineKeyboard as unknown[];
+    expect(sent[0].text).toContain("Question 1 of 1");
+    const keyboard = sent[0].options!.inlineKeyboard as unknown[];
     expect(keyboard).toHaveLength(2); // one row per option, single-select has no extra "Continue" row
   });
 
@@ -163,8 +163,8 @@ describe("sendAnswerableInteraction — ask_user_questions", () => {
       payload: { version: 1, questions: [pickSafeQuestion({ selectionMode: "multi" })] },
     }, { issueId: "issue-1" });
 
-    const keyboard = sent[0]!.options!.inlineKeyboard as Array<Array<{ text: string }>>;
-    expect(keyboard.at(-1)![0]!.text).toContain("Continue");
+    const keyboard = sent[0].options!.inlineKeyboard as Array<Array<{ text: string }>>;
+    expect(keyboard.at(-1)![0].text).toContain("Continue");
   });
 });
 
@@ -177,9 +177,9 @@ describe("sendAnswerableInteraction — request_confirmation", () => {
       payload: { version: 1, prompt: "Ship it?" },
     }, { issueId: "issue-1", companyId: "co-1" });
 
-    const keyboard = sent[0]!.options!.inlineKeyboard as Array<Array<{ text: string }>>;
-    expect(keyboard[0]!.map((b) => b.text).join(",")).toContain("Accept");
-    expect(keyboard[0]!.map((b) => b.text).join(",")).toContain("Reject");
+    const keyboard = sent[0].options!.inlineKeyboard as Array<Array<{ text: string }>>;
+    expect(keyboard[0].map((b) => b.text).join(",")).toContain("Accept");
+    expect(keyboard[0].map((b) => b.text).join(",")).toContain("Reject");
   });
 
   it("hides the Reject button and points to reply-with-reason when a reason is required", async () => {
@@ -190,9 +190,9 @@ describe("sendAnswerableInteraction — request_confirmation", () => {
       payload: { version: 1, prompt: "Ship it?", rejectRequiresReason: true },
     }, { issueId: "issue-1", companyId: "co-1" });
 
-    const keyboard = sent[0]!.options!.inlineKeyboard as Array<Array<{ text: string }>>;
+    const keyboard = sent[0].options!.inlineKeyboard as Array<Array<{ text: string }>>;
     expect(keyboard[0]).toHaveLength(1);
-    expect(sent[0]!.text).toContain("Reply to this message with your reason");
+    expect(sent[0].text).toContain("Reply to this message with your reason");
   });
 
   it("registers a reply mapping (matching worker.ts's instance-scoped read) so replying can reject with a reason", async () => {
@@ -219,12 +219,12 @@ describe("fetchInteraction", () => {
 
     const result = await fetchInteraction(ctx, "http://x", "issue-1", "int-1", "board-tok");
 
-    expect(apiCalls[0]!.url).toBe("http://x/api/issues/issue-1/interactions");
+    expect(apiCalls[0].url).toBe("http://x/api/issues/issue-1/interactions");
     expect(result?.payload).toEqual({ version: 1, prompt: "Ship it?" });
   });
 
   it("returns null when the fetch fails", async () => {
-    const ctx = { ...mockCtx(), state: mockCtx().state } as PluginContext;
+    const ctx = { ...mockCtx(), state: mockCtx().state };
     // Force fetchPaperclipApi to throw by asking for an id that never resolves a JSON body.
     freshInteractions = [];
     const result = await fetchInteraction(ctx, "http://x", "issue-1", "missing", "board-tok");
@@ -237,7 +237,7 @@ describe("resolveInteractionAnswerCallback — expiry and staleness", () => {
     const ctx = mockCtx();
     const handled = await resolveInteractionAnswerCallback(ctx, "tok", "int_nope_accept", "cbid", "http://x", "board-tok");
     expect(handled).toBe(true);
-    expect(answers[0]!.text).toContain("expired or was already answered");
+    expect(answers[0].text).toContain("expired or was already answered");
     expect(apiCalls).toHaveLength(0);
   });
 
@@ -282,7 +282,7 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
       },
     }, { issueId: "issue-1" });
     freshInteractions = [{ id: "int-1", status: "pending", kind: "ask_user_questions" }];
-    return lastCallbackData().split("_")[1] as string;
+    return lastCallbackData().split("_")[1];
   }
 
   it("advances to the next question on a single-select tap", async () => {
@@ -292,7 +292,7 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
     await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o1`, "cbid", "http://x", "board-tok", 1);
 
     expect(sent).toHaveLength(2);
-    expect(sent[1]!.text).toContain("Question 2 of 2");
+    expect(sent[1].text).toContain("Question 2 of 2");
     expect(apiCalls.some((c) => c.method === "POST")).toBe(false);
   });
 
@@ -347,7 +347,7 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
       payload: { version: 1, questions: [pickSafeQuestion({ required: false })] },
     }, { issueId: "issue-1" });
     freshInteractions = [{ id: "int-2", status: "pending", kind: "ask_user_questions" }];
-    const key = lastCallbackData().split("_")[1] as string;
+    const key = lastCallbackData().split("_")[1];
     postResponses.respond = { status: "answered" };
 
     await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_skip`, "cbid", "http://x", "board-tok", 1);
@@ -365,7 +365,7 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
 
     expect(sent).toHaveLength(2); // no new message — same question re-rendered
     expect(edited).toHaveLength(1);
-    expect(edited[0]!.text).toContain("Question 2 of 2");
+    expect(edited[0].text).toContain("Question 2 of 2");
   });
 });
 
@@ -378,7 +378,7 @@ describe("resolveInteractionAnswerCallback — request_confirmation", () => {
     }, { issueId: "issue-1", companyId: "co-1" });
     freshInteractions = [{ id: "int-1", status: "pending", kind: "request_confirmation" }];
     const keyboard = sent.at(-1)!.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>;
-    return keyboard[0]![0]!.callback_data.split("_")[1] as string;
+    return keyboard[0][0].callback_data.split("_")[1];
   }
 
   it("accepts and edits the message on tap", async () => {

@@ -17,7 +17,7 @@ let sentMessages: Array<{ chatId: string; text: string; options?: Record<string,
 let stateStore: Record<string, unknown> = {};
 
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return {
     ...actual,
     sendMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, text: string, options?: Record<string, unknown>) => {

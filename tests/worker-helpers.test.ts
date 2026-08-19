@@ -3,7 +3,7 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 const isForumMock = vi.fn(async () => false);
 vi.mock("../src/telegram-api.js", async () => {
-  const actual = await vi.importActual("../src/telegram-api.js") as Record<string, unknown>;
+  const actual = await vi.importActual("../src/telegram-api.js");
   return { ...actual, isForum: isForumMock };
 });
 

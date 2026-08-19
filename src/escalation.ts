@@ -311,6 +311,12 @@ export class EscalationManager {
         );
       } else if (stored.transport === "acp" && stored.sessionId) {
         // Route back via ACP event
+        // Marked, not endorsed: `events.emit` is a host RPC returning
+        // Promise<void>, so a rejection here is swallowed and the event
+        // silently never lands — the exact failure shape this plugin keeps
+        // hitting. Awaiting it changes behaviour, so it needs a test that
+        // fails when reintroduced rather than a drive-by fix.
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         ctx.events.emit("acp-spawn", stored.companyId, {
           type: "message",
           sessionId: stored.sessionId,
@@ -329,6 +335,12 @@ export class EscalationManager {
     }
 
     // Emit resolution event - companyId is SECOND arg
+    // Marked, not endorsed: `events.emit` is a host RPC returning
+    // Promise<void>, so a rejection here is swallowed and the event
+    // silently never lands — the exact failure shape this plugin keeps
+    // hitting. Awaiting it changes behaviour, so it needs a test that
+    // fails when reintroduced rather than a drive-by fix.
+    // eslint-disable-next-line @typescript-eslint/no-floating-promises
     ctx.events.emit("escalation.resolved", stored.companyId, {
       escalationId: stored.escalationId,
       agentId: stored.agentId,
@@ -389,6 +401,12 @@ export class EscalationManager {
       );
 
       // Emit timeout event - companyId is SECOND arg
+      // Marked, not endorsed: `events.emit` is a host RPC returning
+      // Promise<void>, so a rejection here is swallowed and the event
+      // silently never lands — the exact failure shape this plugin keeps
+      // hitting. Awaiting it changes behaviour, so it needs a test that
+      // fails when reintroduced rather than a drive-by fix.
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       ctx.events.emit("escalation.timed_out", stored.companyId, {
         escalationId,
         agentId: stored.agentId,
