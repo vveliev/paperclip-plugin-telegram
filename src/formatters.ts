@@ -2,6 +2,7 @@ import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import { escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import type { SendMessageOptions } from "./telegram-api.js";
 import { str } from "./coerce.js";
+import { AGENT_ERROR_TRUNCATE_LENGTH } from "./constants.js";
 
 type Payload = Record<string, unknown>;
 
@@ -53,6 +54,16 @@ function agentButton(agentId: string, label: string, publicUrl?: string): { text
 function runButton(agentId: string, runId: string | null, publicUrl?: string): { text: string; url: string } | null {
   if (publicUrl && isExternalUrl(publicUrl) && runId) {
     return { text: "View Run ↗", url: `${publicUrl}/agents/${agentId}/runs/${runId}` };
+  }
+  return null;
+}
+
+// Distinct from runButton: surfaced only when the inline error text was cut,
+// so the affordance for "see the rest of this" doesn't ride on a button
+// whose stated purpose is the run dashboard, not the raw error (BLA-362).
+function fullErrorButton(agentId: string, runId: string | null, publicUrl?: string): { text: string; url: string } | null {
+  if (publicUrl && isExternalUrl(publicUrl) && runId) {
+    return { text: "Full error ↗", url: `${publicUrl}/agents/${agentId}/runs/${runId}` };
   }
   return null;
 }
@@ -237,9 +248,11 @@ export function formatAgentError(event: PluginEvent, opts?: IssueLinksOpts): For
         : `Issue: ${issueLink(issueIdentifier, opts)}`,
     );
   }
-  lines.push(`\n${code(truncateAtWord(errorMessage, 500))}`);
+  const isTruncated = errorMessage.length > AGENT_ERROR_TRUNCATE_LENGTH;
+  lines.push(`\n${code(truncateAtWord(errorMessage, AGENT_ERROR_TRUNCATE_LENGTH))}`);
 
   const buttons = [
+    isTruncated ? fullErrorButton(agentId, runId, opts?.baseUrl) : null,
     runButton(agentId, runId, opts?.baseUrl),
     issueIdentifier ? issueButton(issueIdentifier, opts) : null,
     agentButton(agentId, "View Agent ↗", opts?.baseUrl),
