@@ -222,6 +222,48 @@ describe("handleUpdate - command dispatch", () => {
   });
 });
 
+describe("handleUpdate - language_code capture (BLA-364, prep only)", () => {
+  it("records the sender's language_code in state, keyed by chat and user", async () => {
+    const ctx = mockCtx();
+    const update = {
+      update_id: 100,
+      message: {
+        message_id: 100,
+        chat: { id: LINKED_CHAT_ID },
+        from: { id: 42, language_code: "fr" },
+        text: "bonjour",
+      },
+    } as Parameters<typeof handleUpdate>[3];
+
+    await handleUpdate(ctx, "token", config, update, baseUrl);
+
+    const setCalls = (ctx.state.set as ReturnType<typeof vi.fn>).mock.calls;
+    const call = setCalls.find(([key]) => key.stateKey === `lang_${LINKED_CHAT_ID}_42`);
+    expect(call).toBeTruthy();
+    expect(call?.[0]).toMatchObject({ scopeKind: "instance", stateKey: `lang_${LINKED_CHAT_ID}_42` });
+    expect(call?.[1]).toMatchObject({ languageCode: "fr" });
+  });
+
+  it("does not write state when the update has no language_code (no crash, no bogus entry)", async () => {
+    const ctx = mockCtx();
+    const update = {
+      update_id: 101,
+      message: {
+        message_id: 101,
+        chat: { id: LINKED_CHAT_ID },
+        from: { id: 43 },
+        text: "hi",
+      },
+    } as Parameters<typeof handleUpdate>[3];
+
+    await handleUpdate(ctx, "token", config, update, baseUrl);
+
+    const setCalls = (ctx.state.set as ReturnType<typeof vi.fn>).mock.calls;
+    const call = setCalls.find(([key]) => key.stateKey === `lang_${LINKED_CHAT_ID}_43`);
+    expect(call).toBeUndefined();
+  });
+});
+
 describe("handleUpdate - thread message routing to agents", () => {
   it("routes non-command thread text to an agent session when the chat is linked", async () => {
     routeMessageToAgentResult = true;

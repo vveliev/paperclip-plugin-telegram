@@ -112,7 +112,7 @@ type TelegramUpdate = {
   update_id: number;
   message?: {
     message_id: number;
-    from?: { id: number; username?: string; first_name?: string };
+    from?: { id: number; username?: string; first_name?: string; language_code?: string };
     chat: { id: number; type: string; title?: string };
     text?: string;
     message_thread_id?: number;
@@ -1487,6 +1487,15 @@ export async function handleUpdate(
 
   const chatId = String(msg.chat.id);
   const threadId = msg.message_thread_id;
+
+  // Prep for future localization (BLA-364): record the client's language tag
+  // per chat/user. Not read anywhere yet — no copy should branch on this.
+  if (msg.from?.language_code) {
+    await ctx.state.set(
+      { scopeKind: "instance", stateKey: `lang_${chatId}_${msg.from.id}` },
+      { languageCode: msg.from.language_code, updatedAt: new Date().toISOString() },
+    );
+  }
 
   // Phase 3: Handle media messages
   const hasMedia = !!(msg.voice || msg.audio || msg.video_note || msg.document || msg.photo);
