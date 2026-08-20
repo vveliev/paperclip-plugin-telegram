@@ -55,10 +55,18 @@ export const DEFAULT_CONFIG = {
 
 export const AGENT_ERROR_DEDUPLICATION_WINDOW_MS = 30 * 60 * 1000;
 
-// Cutoff for the error text shown inline in an agent-error notification.
-// formatAgentError truncates at this length and, when it does, adds a
-// distinct "Full error" button rather than relying on "View Run" to double
-// as the link back to the untruncated text (BLA-362).
+// Shared truncation tiers for notification text (issue descriptions,
+// excerpts, previews). Centralized so call sites stay in step with each
+// other instead of drifting on independently-chosen magic numbers (BLA-361).
+export const TRUNCATE_SHORT = 200;
+export const TRUNCATE_MEDIUM = 300;
+export const TRUNCATE_LONG = 350;
+
+// Cutoff for the error text shown inline in an agent-error notification, and
+// reused wherever else a 500-char tier is needed. formatAgentError truncates
+// at this length and, when it does, adds a distinct "Full error" button
+// rather than relying on "View Run" to double as the link back to the
+// untruncated text (BLA-362).
 export const AGENT_ERROR_TRUNCATE_LENGTH = 500;
 
 export const MAX_CONVERSATION_TURNS = 50;
