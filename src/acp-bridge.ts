@@ -1,5 +1,5 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
+import { sendMessage, editMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
 import { truncateAtWord } from "./telegram-api.js";
 import { resolveMappedProjectIdForTopic } from "./topic-projects.js";
 import { str } from "./coerce.js";
@@ -44,12 +44,12 @@ type AcpOutputEvent = {
 // There is no `done: boolean` on the wire — only `type: "done"` (and
 // "error", which likewise ends the turn). Derive a display string per
 // event type since only "text"/"done" carry one directly.
-function formatAcpOutputEvent(event: AcpOutputEvent): { text: string; done: boolean } {
+function deriveDisplayText(event: AcpOutputEvent): { text: string; done: boolean } {
   switch (event.type) {
     case "tool_call":
-      return { text: `🔧 ${event.toolName ?? "tool"}(${event.toolInput ?? ""})`, done: false };
+      return { text: `🔧 \`${event.toolName ?? "tool"}\`(${event.toolInput ?? ""})`, done: false };
     case "tool_result":
-      return { text: `↩ ${event.toolName ?? "tool"} → ${event.toolOutput ?? ""}`, done: false };
+      return { text: `↩ \`${event.toolName ?? "tool"}\` → ${event.toolOutput ?? ""}`, done: false };
     case "error":
       return { text: `⚠️ ${event.error ?? "Unknown error"}`, done: true };
     case "done":
@@ -95,6 +95,14 @@ type OutputQueueEntry = {
   text: string;
   done: boolean;
   queuedAt: number;
+};
+
+// One turn = the run of events for one (chatId, threadId, sessionId) between
+// terminal events. Tracks the single Telegram message currently being edited
+// in place; cleared once the turn ends (`type === "done" | "error"`).
+type OutputTurnState = {
+  messageId: number | null;
+  bufferText: string;
 };
 
 // --- Setup: register ACP output listener ---
@@ -769,7 +777,7 @@ export async function handleAcpOutput(
   companyId?: string,
 ): Promise<void> {
   const { sessionId, chatId, threadId } = event;
-  const { text, done } = formatAcpOutputEvent(event);
+  const { text, done } = deriveDisplayText(event);
 
   const sessions = await getSessions(ctx, chatId, threadId);
   const session = sessions.find((s) => s.sessionId === sessionId);
@@ -931,6 +939,38 @@ function markdownToTelegramHtml(text: string): string {
 
 const TELEGRAM_MAX_LENGTH = 4000; // Leave room for prefix/label overhead
 
+// Robot emoji = this message may still receive edits (the turn's current open
+// chunk). Checkmark emoji = finalized: either the turn ended, or a later
+// chunk superseded it.
+function formatOutputPrefix(displayName: string, isTerminal: boolean): string {
+  const emoji = isTerminal ? "\u2705" : "\ud83e\udd16";
+  return `${emoji} <b>[${escapeHtml(displayName)}]</b> `;
+}
+
+// Split `text` into pieces that each fit within `maxLen`, preferring to
+// break on a newline boundary. Always returns at least one piece, even if
+// `text` already fits.
+function splitIntoChunks(text: string, maxLen: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let splitAt = remaining.lastIndexOf("\n", maxLen);
+    if (splitAt <= 0) splitAt = maxLen;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).replace(/^\n/, "");
+  }
+  chunks.push(remaining);
+  return chunks;
+}
+
+function outputTurnKey(chatId: string, threadId: number, sessionId: string): string {
+  return `output_turn_${chatId}_${threadId}_${sessionId}`;
+}
+
+// Accumulates one turn's events into a single Telegram message, editing it
+// in place, and only opening a new message when a chunk's 4000-char budget
+// is actually exceeded. `done` marks this event as the turn's terminal one
+// (`type === "done" | "error"`), which finalizes the message it lands on.
 async function sendLabeledOutput(
   ctx: PluginContext,
   token: string,
@@ -941,43 +981,48 @@ async function sendLabeledOutput(
   text: string,
   done?: boolean,
 ): Promise<void> {
-  // Split long text into chunks to stay within Telegram's 4096 char limit
-  const chunks: string[] = [];
-  if (text.length <= TELEGRAM_MAX_LENGTH) {
-    chunks.push(text);
-  } else {
-    let remaining = text;
-    while (remaining.length > 0) {
-      if (remaining.length <= TELEGRAM_MAX_LENGTH) {
-        chunks.push(remaining);
-        break;
+  const turnKey = outputTurnKey(chatId, threadId, sessionId);
+  const state = ((await ctx.state.get({
+    scopeKind: "instance",
+    stateKey: turnKey,
+  })) as OutputTurnState | null) ?? { messageId: null, bufferText: "" };
+
+  const combined = state.bufferText ? `${state.bufferText}\n${text}` : text;
+  const chunks =
+    combined.length <= TELEGRAM_MAX_LENGTH ? [combined] : splitIntoChunks(combined, TELEGRAM_MAX_LENGTH);
+
+  let messageId = state.messageId;
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    // Every piece but the last was superseded by the next chunk and will
+    // never be touched again; the last piece is finalized only if this
+    // event itself ends the turn.
+    const isTerminal = isLast ? Boolean(done) : true;
+    const formatted = `${formatOutputPrefix(displayName, isTerminal)}${markdownToTelegramHtml(chunks[i])}`;
+
+    if (i === 0 && messageId !== null) {
+      await editMessage(ctx, token, chatId, messageId, formatted, { parseMode: "HTML" });
+    } else {
+      messageId = await sendMessage(ctx, token, chatId, formatted, {
+        parseMode: "HTML",
+        messageThreadId: threadId,
+      });
+      if (messageId) {
+        await ctx.state.set(
+          { scopeKind: "instance", stateKey: `agent_msg_${chatId}_${messageId}` },
+          { sessionId },
+        );
       }
-      // Try to split at a newline boundary
-      let splitAt = remaining.lastIndexOf("\n", TELEGRAM_MAX_LENGTH);
-      if (splitAt <= 0) splitAt = TELEGRAM_MAX_LENGTH;
-      chunks.push(remaining.slice(0, splitAt));
-      remaining = remaining.slice(splitAt).replace(/^\n/, "");
     }
   }
 
-  for (let i = 0; i < chunks.length; i++) {
-    const isLast = i === chunks.length - 1;
-    // Convert agent Markdown to Telegram HTML for proper rendering
-    const doneEmoji = done ? "\u2705" : "\ud83e\udd16";
-    const chunkPrefix = `${doneEmoji} <b>[${escapeHtml(displayName)}]</b> `;
-    const formatted = `${chunkPrefix}${markdownToTelegramHtml(chunks[i])}`;
-
-    const messageId = await sendMessage(ctx, token, chatId, formatted, {
-      parseMode: "HTML",
-      messageThreadId: threadId,
-    });
-
-    if (messageId && isLast) {
-      await ctx.state.set(
-        { scopeKind: "instance", stateKey: `agent_msg_${chatId}_${messageId}` },
-        { sessionId },
-      );
-    }
+  if (done) {
+    await ctx.state.set({ scopeKind: "instance", stateKey: turnKey }, null);
+  } else {
+    await ctx.state.set(
+      { scopeKind: "instance", stateKey: turnKey },
+      { messageId, bufferText: chunks[chunks.length - 1] } satisfies OutputTurnState,
+    );
   }
 }
 
