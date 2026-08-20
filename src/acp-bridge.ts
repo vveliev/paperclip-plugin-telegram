@@ -104,6 +104,7 @@ type OutputQueueEntry = {
 type OutputTurnState = {
   messageId: number | null;
   bufferText: string;
+  lastEditAt: number;
 };
 
 // --- Setup: register ACP output listener ---
@@ -945,6 +946,12 @@ function markdownToTelegramHtml(text: string): string {
 
 const TELEGRAM_MAX_LENGTH = 4000; // Leave room for prefix/label overhead
 
+// Given the chatty upstream cadence (dozens of events per turn, un-batched),
+// editing on every event risks Telegram's per-chat flood limits well before
+// any chunk boundary. Coalesce buffered deltas into at most one edit per
+// open message per window; a tuning knob, not a correctness requirement.
+const EDIT_DEBOUNCE_MS = 1000;
+
 // Robot emoji = this message may still receive edits (the turn's current open
 // chunk). Checkmark emoji = finalized: either the turn ended, or a later
 // chunk superseded it.
@@ -991,9 +998,29 @@ async function sendLabeledOutput(
   const state = ((await ctx.state.get({
     scopeKind: "instance",
     stateKey: turnKey,
-  })) as OutputTurnState | null) ?? { messageId: null, bufferText: "" };
+  })) as OutputTurnState | null) ?? { messageId: null, bufferText: "", lastEditAt: 0 };
 
   const combined = state.bufferText ? `${state.bufferText}\n${text}` : text;
+
+  // No-op skip: nothing new to say and this event doesn't end the turn
+  // (duplicate/empty event) — skip outright rather than sending an edit
+  // and absorbing Telegram's "message is not modified" error.
+  if (combined === state.bufferText && !done) {
+    return;
+  }
+
+  // Debounce: coalesce buffered deltas into the open message at most once
+  // per window instead of editing on every event. Only applies to edits of
+  // an already-open message — the turn's first send and terminal events
+  // (done/error) always go through immediately.
+  if (!done && state.messageId !== null && Date.now() - state.lastEditAt < EDIT_DEBOUNCE_MS) {
+    await ctx.state.set(
+      { scopeKind: "instance", stateKey: turnKey },
+      { ...state, bufferText: combined } satisfies OutputTurnState,
+    );
+    return;
+  }
+
   const chunks =
     combined.length <= TELEGRAM_MAX_LENGTH ? [combined] : splitIntoChunks(combined, TELEGRAM_MAX_LENGTH);
 
@@ -1007,7 +1034,22 @@ async function sendLabeledOutput(
     const formatted = `${formatOutputPrefix(displayName, isTerminal)}${markdownToTelegramHtml(chunks[i])}`;
 
     if (i === 0 && messageId !== null) {
-      await editMessage(ctx, token, chatId, messageId, formatted, { parseMode: "HTML" });
+      const edited = await editMessage(ctx, token, chatId, messageId, formatted, { parseMode: "HTML" });
+      if (!edited) {
+        // editMessage has no retry (unlike sendMessage's 3-attempt backoff).
+        // Self-heal by opening a fresh message with the current buffer —
+        // reuses the same "open a new chunk" path as a boundary crossing.
+        messageId = await sendMessage(ctx, token, chatId, formatted, {
+          parseMode: "HTML",
+          messageThreadId: threadId,
+        });
+        if (messageId) {
+          await ctx.state.set(
+            { scopeKind: "instance", stateKey: `agent_msg_${chatId}_${messageId}` },
+            { sessionId },
+          );
+        }
+      }
     } else {
       messageId = await sendMessage(ctx, token, chatId, formatted, {
         parseMode: "HTML",
@@ -1027,7 +1069,7 @@ async function sendLabeledOutput(
   } else {
     await ctx.state.set(
       { scopeKind: "instance", stateKey: turnKey },
-      { messageId, bufferText: chunks[chunks.length - 1] } satisfies OutputTurnState,
+      { messageId, bufferText: chunks[chunks.length - 1], lastEditAt: Date.now() } satisfies OutputTurnState,
     );
   }
 }
