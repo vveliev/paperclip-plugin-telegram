@@ -1,5 +1,5 @@
 import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@paperclipai/plugin-sdk";
-import { sendMessage, escapeMarkdownV2, sendChatAction } from "./telegram-api.js";
+import { sendMessage, escapeMarkdownV2, sendChatAction, type ReplyKeyboardMarkup } from "./telegram-api.js";
 import { METRIC_NAMES, DEFAULT_CONFIG } from "./constants.js";
 import { countAgents } from "./agent-status.js";
 import { fetchAttention, sendAttentionList, describeDecisionsError } from "./decisions.js";
@@ -64,6 +64,7 @@ export const BOT_COMMANDS: BotCommand[] = [
   { command: "approve", description: "Approve a pending request by its ID" },
   { command: "help", description: "Show this list of commands" },
   { command: "settings", description: "Show connection, routing, and notification settings" },
+  { command: "keyboard", description: "Toggle a persistent shortcut keyboard (DMs only)" },
   { command: "acp", description: "Manage agent sessions: start, check, cancel, or close" },
   { command: "commands", description: "Manage custom commands: list, import, run, or delete" },
   { command: "connect", description: "Link this chat to a Paperclip company" },
@@ -123,6 +124,7 @@ export const HELP_GROUPS: HelpGroup[] = [
     title: "Setup",
     entries: [
       { usage: "/settings", description: "Show connection, routing, and notification settings" },
+      { usage: "/keyboard <on|off>", description: "Toggle a persistent shortcut keyboard (DMs only)" },
       { usage: "/connect <company>", description: "Link this chat to a Paperclip company" },
       { usage: "/connect_topic <project> [topic-id]", description: "Map a project to this forum topic (forum groups only)" },
       { usage: "/topics <list|remove|clear>", description: "Manage this chat's forum topic mappings" },
@@ -143,6 +145,7 @@ export async function handleCommand(
   boardApiToken?: string,
   maxAgentsPerThread?: number,
   settingsConfig?: ChatSettingsConfig,
+  chatType?: string,
 ): Promise<void> {
   await ctx.metrics.write(METRIC_NAMES.commandsHandled, 1);
 
@@ -175,6 +178,9 @@ export async function handleCommand(
       break;
     case "settings":
       await handleSettings(ctx, token, chatId, messageThreadId, settingsConfig ?? DEFAULT_SETTINGS_CONFIG);
+      break;
+    case "keyboard":
+      await handleKeyboard(ctx, token, chatId, args, messageThreadId, chatType);
       break;
     case "connect":
       await handleConnect(ctx, token, chatId, args, messageThreadId);
@@ -531,6 +537,60 @@ async function handleSettings(
     parseMode: "MarkdownV2",
     messageThreadId,
   });
+}
+
+// The one persistent row this prototype offers: the read-only commands a
+// user checks most often. Kept to a single row so it stays visible without
+// pushing the text input off-screen on small clients.
+const PERSISTENT_KEYBOARD: ReplyKeyboardMarkup = {
+  keyboard: [["/status", "/issues", "/agents", "/decisions", "/help"]],
+  resizeKeyboard: true,
+  isPersistent: true,
+};
+
+/**
+ * /keyboard on|off — opt-in persistent reply keyboard prototype (BLA-397,
+ * see the reply-keyboard-experiment-eval doc on BLA-367 for rationale).
+ *
+ * Reply keyboards are chat-level, not per-user, so showing one in a group
+ * would impose it on everyone in that chat regardless of their own
+ * preference. Restricting to DMs keeps this opt-in per person.
+ */
+async function handleKeyboard(
+  ctx: PluginContext,
+  token: string,
+  chatId: string,
+  args: string,
+  messageThreadId: number | undefined,
+  chatType: string | undefined,
+): Promise<void> {
+  if (chatType !== "private") {
+    await sendMessage(
+      ctx,
+      token,
+      chatId,
+      "/keyboard is only available in a direct message with the bot.",
+      { messageThreadId },
+    );
+    return;
+  }
+
+  switch (args.trim().toLowerCase()) {
+    case "on":
+      await sendMessage(ctx, token, chatId, "Persistent keyboard enabled.", {
+        messageThreadId,
+        keyboard: PERSISTENT_KEYBOARD,
+      });
+      break;
+    case "off":
+      await sendMessage(ctx, token, chatId, "Persistent keyboard disabled.", {
+        messageThreadId,
+        keyboard: { removeKeyboard: true },
+      });
+      break;
+    default:
+      await sendMessage(ctx, token, chatId, "Usage: /keyboard on|off", { messageThreadId });
+  }
 }
 
 async function handleConnect(

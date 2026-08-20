@@ -90,6 +90,44 @@ describe("sendMessage", () => {
     });
   });
 
+  it("wraps a persistent reply keyboard in reply_markup", async () => {
+    const ctx = makeCtx();
+    await sendMessage(ctx, "tok", "chat-1", "pick", {
+      keyboard: {
+        keyboard: [["/status", "/help"]],
+        resizeKeyboard: true,
+        isPersistent: true,
+      },
+    });
+
+    expect(bodyOf(calls[0]).reply_markup).toEqual({
+      keyboard: [[{ text: "/status" }, { text: "/help" }]],
+      resize_keyboard: true,
+      is_persistent: true,
+    });
+  });
+
+  it("sends remove_keyboard for a keyboard removal", async () => {
+    const ctx = makeCtx();
+    await sendMessage(ctx, "tok", "chat-1", "gone", {
+      keyboard: { removeKeyboard: true },
+    });
+
+    expect(bodyOf(calls[0]).reply_markup).toEqual({ remove_keyboard: true });
+  });
+
+  it("prefers inlineKeyboard over a reply keyboard when both are set", async () => {
+    const ctx = makeCtx();
+    await sendMessage(ctx, "tok", "chat-1", "pick", {
+      inlineKeyboard: [[{ text: "Yes", callback_data: "y" }]],
+      keyboard: { removeKeyboard: true },
+    });
+
+    expect(bodyOf(calls[0]).reply_markup).toEqual({
+      inline_keyboard: [[{ text: "Yes", callback_data: "y" }]],
+    });
+  });
+
   it("retries a failed MarkdownV2 send as plain text instead of dropping it", async () => {
     // This is the safety net under /decisions: a single unescaped character
     // makes Telegram reject the whole message. Without the retry the user gets
