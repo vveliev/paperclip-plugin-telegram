@@ -2,7 +2,7 @@ import type { PluginEvent } from "@paperclipai/plugin-sdk";
 import { escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import type { SendMessageOptions } from "./telegram-api.js";
 import { str } from "./coerce.js";
-import { AGENT_ERROR_TRUNCATE_LENGTH } from "./constants.js";
+import { AGENT_ERROR_TRUNCATE_LENGTH, TRUNCATE_SHORT, TRUNCATE_MEDIUM } from "./constants.js";
 
 type Payload = Record<string, unknown>;
 
@@ -106,7 +106,7 @@ export function formatIssueCreated(event: PluginEvent, opts?: IssueLinksOpts): F
   if (meta.length > 0) lines.push(meta.join(" \\| "));
 
   if (p.description) {
-    const desc = truncateAtWord(str(p.description), 200);
+    const desc = truncateAtWord(str(p.description), TRUNCATE_SHORT);
     lines.push(`\n${esc(">")} ${esc(desc)}`);
   }
 
@@ -169,7 +169,7 @@ export function formatIssueDone(event: PluginEvent, opts?: IssueLinksOpts): Form
   ];
 
   if (comment) {
-    const truncated = truncateAtWord(comment, 300);
+    const truncated = truncateAtWord(comment, TRUNCATE_MEDIUM);
     lines.push(`\n${esc(">")} ${esc(truncated)}`);
   }
 
@@ -198,7 +198,7 @@ export function formatApprovalCreated(event: PluginEvent, opts?: IssueLinksOpts)
   ];
 
   if (agentName) lines.push(`Agent: ${esc(agentName)} \\| Type: ${code(approvalType)}`);
-  if (description) lines.push(`\n${esc(truncateAtWord(description, 300))}`);
+  if (description) lines.push(`\n${esc(truncateAtWord(description, TRUNCATE_MEDIUM))}`);
 
   // Add linked issues if present
   const linkedIssues = Array.isArray(p.linkedIssues) ? p.linkedIssues as Array<Payload> : [];

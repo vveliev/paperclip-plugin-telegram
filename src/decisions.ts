@@ -1,6 +1,7 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2 } from "./telegram-api.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
+import { TRUNCATE_MEDIUM } from "./constants.js";
 import {
   fetchInteraction,
   sendAnswerableInteraction,
@@ -236,7 +237,7 @@ export function renderAttentionItem(
   if (item.whyNow) lines.push("", escapeMarkdownV2(item.whyNow));
 
   if (item.excerpt) {
-    const excerpt = item.excerpt.length > 300 ? `${item.excerpt.slice(0, 300)}…` : item.excerpt;
+    const excerpt = item.excerpt.length > TRUNCATE_MEDIUM ? `${item.excerpt.slice(0, TRUNCATE_MEDIUM)}…` : item.excerpt;
     lines.push("", escapeMarkdownV2(excerpt));
   }
 

@@ -1,7 +1,7 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, editMessage, answerCallbackQuery, escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
-import { METRIC_NAMES } from "./constants.js";
+import { METRIC_NAMES, TRUNCATE_LONG } from "./constants.js";
 
 /**
  * Answer `ask_user_questions` and `request_confirmation` interactions from
@@ -227,10 +227,10 @@ function renderConfirmationText(payload: RequestConfirmationPayload): string {
     lines.push(
       "",
       escapeMarkdownV2(`⚠️ ${payload.toolAction.risk} action: ${payload.toolAction.toolDisplayName}`),
-      escapeMarkdownV2(truncateAtWord(payload.toolAction.previewMarkdown, 350)),
+      escapeMarkdownV2(truncateAtWord(payload.toolAction.previewMarkdown, TRUNCATE_LONG)),
     );
   } else if (payload.detailsMarkdown) {
-    lines.push("", escapeMarkdownV2(truncateAtWord(payload.detailsMarkdown, 350)));
+    lines.push("", escapeMarkdownV2(truncateAtWord(payload.detailsMarkdown, TRUNCATE_LONG)));
   }
   lines.push(
     "",
