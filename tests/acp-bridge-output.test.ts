@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { handleAcpOutput } from "../src/acp-bridge.js";
+import { editMessage } from "../src/telegram-api.js";
 
 let sentMessages: Array<{ chatId: string; text: string; options?: Record<string, unknown> }> = [];
 let editedMessages: Array<{ chatId: string; messageId: number; text: string; options?: Record<string, unknown> }> = [];
@@ -54,6 +55,7 @@ beforeEach(() => {
   editedMessages = [];
   stateStore = {};
   nextMessageId = 100;
+  vi.mocked(editMessage).mockClear();
 });
 
 describe("handleAcpOutput - chunking (regression: Telegram rejects messages over 4096 chars)", () => {
@@ -97,12 +99,21 @@ describe("handleAcpOutput - chunking (regression: Telegram rejects messages over
 });
 
 describe("handleAcpOutput - accumulate/chunk/edit turn state", () => {
+  // These events are spaced past the edit debounce window (§8) so each one
+  // lands as its own edit — see the "flood control" describe block below for
+  // what happens when events arrive faster than the debounce window.
   it("edits one message in place across N text events instead of sending N messages", async () => {
     stateStore["sessions_chat-1_42"] = [activeSession()];
     const ctx = mockCtx();
+    vi.useFakeTimers();
 
-    for (let i = 0; i < 5; i++) {
-      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: `line ${i}` });
+    try {
+      for (let i = 0; i < 5; i++) {
+        await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: `line ${i}` });
+        vi.advanceTimersByTime(1001);
+      }
+    } finally {
+      vi.useRealTimers();
     }
 
     expect(sentMessages).toHaveLength(1);
@@ -118,12 +129,19 @@ describe("handleAcpOutput - accumulate/chunk/edit turn state", () => {
   it("opens exactly one new message when the accumulated buffer crosses the 4000-char boundary mid-turn, and only the newer message keeps receiving edits", async () => {
     stateStore["sessions_chat-1_42"] = [activeSession()];
     const ctx = mockCtx();
+    vi.useFakeTimers();
 
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "a".repeat(3990) });
-    // Pushes the accumulated buffer past 4000 chars — must finalize message 1 and open message 2.
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "b".repeat(50) });
-    // A further edit must land on message 2, never message 1 again.
-    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "c".repeat(10) });
+    try {
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "a".repeat(3990) });
+      vi.advanceTimersByTime(1001);
+      // Pushes the accumulated buffer past 4000 chars — must finalize message 1 and open message 2.
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "b".repeat(50) });
+      vi.advanceTimersByTime(1001);
+      // A further edit must land on message 2, never message 1 again.
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "c".repeat(10) });
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(sentMessages).toHaveLength(2);
     const [firstMessageId, secondMessageId] = [100, 101];
@@ -164,6 +182,85 @@ describe("handleAcpOutput - accumulate/chunk/edit turn state", () => {
     expect(sentMessages).toHaveLength(2);
     expect(sentMessages[1].text).toContain("new turn");
     expect(sentMessages[1].text).toContain("🤖");
+  });
+});
+
+describe("handleAcpOutput - resilience: edit-failure fallback, no-op skip, edit debounce (BLA-385)", () => {
+  it("falls back to a new sendMessage when editMessage fails, and continues the turn from the new message", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+    vi.useFakeTimers();
+
+    try {
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "first" });
+      vi.advanceTimersByTime(1001);
+
+      vi.mocked(editMessage).mockResolvedValueOnce(false);
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "second" });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // editMessage was attempted (and failed) rather than silently skipped.
+    expect(editMessage).toHaveBeenCalledTimes(1);
+
+    // The failed edit falls back to a brand-new sendMessage carrying the full buffer.
+    expect(sentMessages).toHaveLength(2);
+    expect(sentMessages[1].text).toContain("first");
+    expect(sentMessages[1].text).toContain("second");
+
+    // Turn state now points at the new message, which has its own reply-to mapping.
+    const newMessageId = 101;
+    expect(stateStore["output_turn_chat-1_42_s1"]).toMatchObject({ messageId: newMessageId });
+    expect(stateStore[`agent_msg_chat-1_${newMessageId}`]).toEqual({ sessionId: "s1" });
+
+    // The turn continues on the new message — a later edit lands there, never on the old one.
+    vi.useFakeTimers();
+    try {
+      vi.advanceTimersByTime(1001);
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: "wrapping up" });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(editedMessages).toHaveLength(1);
+    expect(editedMessages[0].messageId).toBe(newMessageId);
+  });
+
+  it("skips the editMessage call for a duplicate/empty event that doesn't change the buffer", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    // A "text" event with no `text` field derives to an empty string; as the
+    // very first event of a turn the buffer is also "" — nothing changed and
+    // the turn isn't ending, so there's nothing to send or edit.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42 });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42 });
+
+    expect(sentMessages).toHaveLength(0);
+    expect(editedMessages).toHaveLength(0);
+  });
+
+  it("coalesces rapid-fire events within the debounce window into a single edit, and still flushes a terminal event immediately", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "line 0" });
+    // Rapid-fire: no time advances between these, so each lands inside the debounce window.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "line 1" });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "line 2" });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "line 3" });
+    // Terminal event must flush immediately, without waiting out the debounce window.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: "line 4" });
+
+    expect(sentMessages).toHaveLength(1);
+    // All 4 coalesced deltas plus the terminal event land in a single edit.
+    expect(editedMessages).toHaveLength(1);
+    expect(editedMessages[0].text).toContain("line 0");
+    expect(editedMessages[0].text).toContain("line 1");
+    expect(editedMessages[0].text).toContain("line 2");
+    expect(editedMessages[0].text).toContain("line 3");
+    expect(editedMessages[0].text).toContain("line 4");
+    expect(editedMessages[0].text).toContain("✅");
   });
 });
 
