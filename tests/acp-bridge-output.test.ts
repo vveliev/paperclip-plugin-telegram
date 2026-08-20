@@ -3,6 +3,7 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { handleAcpOutput } from "../src/acp-bridge.js";
 
 let sentMessages: Array<{ chatId: string; text: string; options?: Record<string, unknown> }> = [];
+let editedMessages: Array<{ chatId: string; messageId: number; text: string; options?: Record<string, unknown> }> = [];
 let stateStore: Record<string, unknown> = {};
 let nextMessageId = 100;
 
@@ -13,6 +14,10 @@ vi.mock("../src/telegram-api.js", async () => {
     sendMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, text: string, options?: Record<string, unknown>) => {
       sentMessages.push({ chatId, text, options });
       return nextMessageId++;
+    }),
+    editMessage: vi.fn(async (_ctx: unknown, _token: string, chatId: string, messageId: number, text: string, options?: Record<string, unknown>) => {
+      editedMessages.push({ chatId, messageId, text, options });
+      return true;
     }),
   };
 });
@@ -46,6 +51,7 @@ function activeSession(overrides: Partial<Record<string, unknown>> = {}) {
 
 beforeEach(() => {
   sentMessages = [];
+  editedMessages = [];
   stateStore = {};
   nextMessageId = 100;
 });
@@ -75,19 +81,89 @@ describe("handleAcpOutput - chunking (regression: Telegram rejects messages over
     expect(sentMessages).toHaveLength(1);
   });
 
-  it("maps the reply-to state key to the LAST chunk's message id, not the first (regression: multi-chunk replies must route to the same agent)", async () => {
+  it("writes the agent_msg reply-to mapping for every message opened, not only the last (regression: multi-chunk replies must route to the same agent from any chunk)", async () => {
     stateStore["sessions_chat-1_42"] = [activeSession()];
     const ctx = mockCtx();
     const longText = "line\n".repeat(1000);
 
     await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: longText });
 
-    const lastMessageId = nextMessageId - 1;
-    expect(stateStore[`agent_msg_chat-1_${lastMessageId}`]).toEqual({ sessionId: "s1" });
-    // Earlier chunks must NOT have a reply-to mapping — only the final one does
-    for (let id = 100; id < lastMessageId; id++) {
-      expect(stateStore[`agent_msg_chat-1_${id}`]).toBeUndefined();
+    expect(sentMessages.length).toBeGreaterThan(1);
+    for (let i = 0; i < sentMessages.length; i++) {
+      const messageId = 100 + i;
+      expect(stateStore[`agent_msg_chat-1_${messageId}`]).toEqual({ sessionId: "s1" });
     }
+  });
+});
+
+describe("handleAcpOutput - accumulate/chunk/edit turn state", () => {
+  it("edits one message in place across N text events instead of sending N messages", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    for (let i = 0; i < 5; i++) {
+      await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: `line ${i}` });
+    }
+
+    expect(sentMessages).toHaveLength(1);
+    expect(editedMessages).toHaveLength(4);
+    // The open message keeps accumulating every line, joined one-per-line.
+    expect(editedMessages[3].text).toContain("line 0");
+    expect(editedMessages[3].text).toContain("line 4");
+    // Still open — not yet finalized.
+    expect(editedMessages[3].text).toContain("🤖");
+    expect(editedMessages[3].text).not.toContain("✅");
+  });
+
+  it("opens exactly one new message when the accumulated buffer crosses the 4000-char boundary mid-turn, and only the newer message keeps receiving edits", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "a".repeat(3990) });
+    // Pushes the accumulated buffer past 4000 chars — must finalize message 1 and open message 2.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "b".repeat(50) });
+    // A further edit must land on message 2, never message 1 again.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "c".repeat(10) });
+
+    expect(sentMessages).toHaveLength(2);
+    const [firstMessageId, secondMessageId] = [100, 101];
+
+    // Message 1 is finalized once (superseded by the boundary crossing) and never touched again.
+    const editsToFirst = editedMessages.filter((e) => e.messageId === firstMessageId);
+    expect(editsToFirst).toHaveLength(1);
+    expect(editsToFirst[0].text).toContain("✅");
+
+    // Message 2 receives the follow-up edit.
+    const editsToSecond = editedMessages.filter((e) => e.messageId === secondMessageId);
+    expect(editsToSecond).toHaveLength(1);
+    expect(editsToSecond[0].text).toContain("c".repeat(10));
+    expect(editsToSecond[0].text).toContain("🤖");
+
+    // Both messages that were ever opened must have a reply-to mapping.
+    expect(stateStore[`agent_msg_chat-1_${firstMessageId}`]).toEqual({ sessionId: "s1" });
+    expect(stateStore[`agent_msg_chat-1_${secondMessageId}`]).toEqual({ sessionId: "s1" });
+  });
+
+  it("finalizes the open message and clears turn state on a terminal event, so the next event opens a brand-new message", async () => {
+    stateStore["sessions_chat-1_42"] = [activeSession()];
+    const ctx = mockCtx();
+
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "working" });
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: "finished" });
+
+    expect(sentMessages).toHaveLength(1);
+    expect(editedMessages).toHaveLength(1);
+    expect(editedMessages[0].messageId).toBe(100);
+    expect(editedMessages[0].text).toContain("finished");
+    expect(editedMessages[0].text).toContain("✅");
+    expect(stateStore["output_turn_chat-1_42_s1"]).toBeNull();
+
+    // A later event for the same session starts a fresh message chain.
+    await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "new turn" });
+
+    expect(sentMessages).toHaveLength(2);
+    expect(sentMessages[1].text).toContain("new turn");
+    expect(sentMessages[1].text).toContain("🤖");
   });
 });
 
@@ -136,10 +212,14 @@ describe("handleAcpOutput - real ACP wire contract (regression: tool_call/tool_r
       sessionId: "s1", type: "error", chatId: "chat-1", threadId: 42, error: "agent crashed",
     })).resolves.toBeUndefined();
 
-    // The error yields the floor before its own message is sent, so s2's
-    // queued output flushes first (same ordering as a normal `done`).
-    expect(sentMessages[sentMessages.length - 2].text).toContain("waiting");
-    expect(sentMessages[sentMessages.length - 1].text).toContain("agent crashed");
+    // The error yields the floor before its own message is applied, so s2's
+    // queued output flushes (as a new sendMessage) before s1's open message
+    // is edited to its finalized, error-carrying content.
+    expect(sentMessages).toHaveLength(2);
+    expect(sentMessages[1].text).toContain("waiting");
+    expect(editedMessages).toHaveLength(1);
+    expect(editedMessages[0].text).toContain("agent crashed");
+    expect(editedMessages[0].text).toContain("✅");
   });
 
   it("uses event.text verbatim for done events, and treats done as terminal", async () => {
@@ -192,16 +272,21 @@ describe("handleAcpOutput - multi-agent output sequencing (regression: interleav
     await handleAcpOutput(ctx, "token", { sessionId: "s2", type: "text", chatId: "chat-1", threadId: 42, text: "waiting to test" });
     expect(sentMessages).toHaveLength(1);
 
-    // Builder finishes — this should flush Tester's queued output.
+    // Builder finishes — this should flush Tester's queued output. Builder's
+    // own "done" lands on its already-open message as an edit, not a new send.
     await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "done", chatId: "chat-1", threadId: 42, text: "build complete" });
 
-    expect(sentMessages).toHaveLength(3);
+    expect(sentMessages).toHaveLength(2);
+    expect(editedMessages).toHaveLength(1);
+
     // The queued Tester output is flushed as soon as Builder yields the floor,
-    // before Builder's own "done" message is sent.
+    // before Builder's own "done" edit is applied.
     expect(sentMessages[1].text).toContain("Tester");
     expect(sentMessages[1].text).toContain("waiting to test");
-    expect(sentMessages[2].text).toContain("Builder");
-    expect(sentMessages[2].text).toContain("build complete");
+    expect(editedMessages[0].messageId).toBe(100);
+    expect(editedMessages[0].text).toContain("Builder");
+    expect(editedMessages[0].text).toContain("build complete");
+    expect(editedMessages[0].text).toContain("✅");
   });
 
   it("does not engage sequencing when only one agent is active in the thread", async () => {
