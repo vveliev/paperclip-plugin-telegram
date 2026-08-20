@@ -1581,6 +1581,7 @@ export async function handleUpdate(
         notifyOnAgentRunStarted: config.notifyOnAgentRunStarted,
         notifyOnAgentRunFinished: config.notifyOnAgentRunFinished,
       },
+      msg.chat.type,
     );
     return;
   }

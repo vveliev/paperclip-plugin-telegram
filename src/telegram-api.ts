@@ -11,11 +11,19 @@ type InlineButton = {
 
 type InlineKeyboard = InlineButton[][];
 
+// Reply keyboards (unlike inlineKeyboard's per-message buttons) replace the
+// client's on-screen keyboard for the whole chat, so the two are mutually
+// exclusive on a single sendMessage call -- inlineKeyboard wins if both are set.
+export type ReplyKeyboardMarkup =
+  | { keyboard: string[][]; resizeKeyboard?: boolean; isPersistent?: boolean; removeKeyboard?: never }
+  | { removeKeyboard: true; keyboard?: never; resizeKeyboard?: never; isPersistent?: never };
+
 export type SendMessageOptions = {
   parseMode?: "MarkdownV2" | "HTML";
   replyToMessageId?: number;
   messageThreadId?: number;
   inlineKeyboard?: InlineKeyboard;
+  keyboard?: ReplyKeyboardMarkup;
   disableNotification?: boolean;
 };
 
@@ -40,6 +48,14 @@ export async function sendMessage(
     body.reply_markup = {
       inline_keyboard: options.inlineKeyboard,
     };
+  } else if (options.keyboard) {
+    body.reply_markup = "removeKeyboard" in options.keyboard
+      ? { remove_keyboard: true }
+      : {
+          keyboard: options.keyboard.keyboard.map((row) => row.map((text) => ({ text }))),
+          resize_keyboard: options.keyboard.resizeKeyboard,
+          is_persistent: options.keyboard.isPersistent,
+        };
   }
 
   for (let attempt = 0; attempt < 3; attempt++) {
