@@ -203,6 +203,26 @@ describe("handleUpdate - command dispatch", () => {
     expect(handleCommandCalls).toHaveLength(0);
   });
 
+  it("passes the chat type through, which /keyboard needs to restrict itself to DMs", async () => {
+    const ctx = mockCtx();
+    const update = {
+      update_id: 4,
+      message: {
+        message_id: 4,
+        chat: { id: LINKED_CHAT_ID, type: "private" },
+        from: { id: 42 },
+        text: "/keyboard",
+        entities: [{ type: "bot_command", offset: 0, length: 9 }],
+      },
+    } as Parameters<typeof handleUpdate>[3];
+
+    await handleUpdate(ctx, "token", config, update, baseUrl);
+
+    expect(handleCommandCalls).toHaveLength(1);
+    const call = handleCommandCalls[0];
+    expect(call[call.length - 1]).toBe("private");
+  });
+
   it("does not dispatch commands when enableCommands is false", async () => {
     const ctx = mockCtx();
     const disabledConfig = { ...config, enableCommands: false } as Parameters<typeof handleUpdate>[2];

@@ -629,6 +629,67 @@ describe("/settings", () => {
   });
 });
 
+describe("/keyboard", () => {
+  // handleCommand's chatType param sits after settingsConfig; earlier
+  // positional args are irrelevant to /keyboard so they're left undefined.
+  const call = (chatId: string, args: string, chatType: string | undefined) =>
+    handleCommand(mockCtx(), "token", chatId, "keyboard", args, undefined, undefined, undefined, undefined, undefined, undefined, undefined, chatType);
+
+  it("sends a persistent keyboard on 'on' in a private chat", async () => {
+    await call("123", "on", "private");
+
+    expect(sentMessages.length).toBe(1);
+    expect(sentMessages[0].text).toContain("enabled");
+    expect(sentMessages[0].options).toMatchObject({
+      keyboard: {
+        keyboard: [["/status", "/issues", "/agents", "/decisions", "/help"]],
+        resizeKeyboard: true,
+        isPersistent: true,
+      },
+    });
+  });
+
+  it("removes the keyboard on 'off' in a private chat", async () => {
+    await call("123", "off", "private");
+
+    expect(sentMessages[0].text).toContain("disabled");
+    expect(sentMessages[0].options).toMatchObject({ keyboard: { removeKeyboard: true } });
+  });
+
+  it("is case-insensitive and trims whitespace", async () => {
+    await call("123", "  ON  ", "private");
+    expect(sentMessages[0].options).toMatchObject({ keyboard: { isPersistent: true } });
+  });
+
+  it("shows usage on an unrecognized argument", async () => {
+    await call("123", "sideways", "private");
+    expect(sentMessages[0].text).toBe("Usage: /keyboard on|off");
+  });
+
+  it("shows usage when called with no argument", async () => {
+    await call("123", "", "private");
+    expect(sentMessages[0].text).toBe("Usage: /keyboard on|off");
+  });
+
+  // Reply keyboards are chat-level, not per-user -- a shared group keyboard
+  // is out of scope for this opt-in prototype (BLA-397).
+  it("rejects group chats instead of imposing a shared keyboard", async () => {
+    await call("-100123", "on", "group");
+    expect(sentMessages[0].text).toContain("direct message");
+    expect(sentMessages[0].options?.keyboard).toBeUndefined();
+  });
+
+  it("rejects supergroup chats", async () => {
+    await call("-100123", "on", "supergroup");
+    expect(sentMessages[0].text).toContain("direct message");
+  });
+
+  it("rejects when chat type is unknown/unset", async () => {
+    await call("123", "on", undefined);
+    expect(sentMessages[0].text).toContain("direct message");
+  });
+});
+
 describe("BOT_COMMANDS", () => {
   it("has all expected commands", () => {
     const names = BOT_COMMANDS.map(c => c.command);
