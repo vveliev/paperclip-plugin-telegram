@@ -9,6 +9,7 @@ import {
   MAX_CONVERSATION_TURNS,
   ACP_SPAWN_EVENT,
   ACP_OUTPUT_EVENT,
+  TRUNCATE_SHORT,
 } from "./constants.js";
 
 // --- Types ---
@@ -248,8 +249,8 @@ export async function wakeAgentWithIssue(
   projectId?: string,
 ): Promise<string | null> {
   try {
-    const title = truncateAtWord(promptText.replace(/\n/g, " "), 200);
-    const description = promptText.length > 200 ? promptText : undefined;
+    const title = truncateAtWord(promptText.replace(/\n/g, " "), TRUNCATE_SHORT);
+    const description = promptText.length > TRUNCATE_SHORT ? promptText : undefined;
 
     const issue = await ctx.issues.create({
       companyId,

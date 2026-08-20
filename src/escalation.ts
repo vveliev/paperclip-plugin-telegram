@@ -1,6 +1,7 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, editMessage, escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import { wakeAgentWithIssue } from "./acp-bridge.js";
+import { AGENT_ERROR_TRUNCATE_LENGTH, TRUNCATE_MEDIUM } from "./constants.js";
 
 export type EscalationReason =
   | "low_confidence"
@@ -88,7 +89,7 @@ export class EscalationManager {
       `${esc("\u26a0\ufe0f")} *Escalation* \\- ${esc(reasonLabel)}${confidence}`,
       "",
       `*Agent:* ${esc(event.agentId)}`,
-      `*Reason:* ${esc(event.context.agentReasoning ? truncateAtWord(event.context.agentReasoning, 500) : "No details provided")}`,
+      `*Reason:* ${esc(event.context.agentReasoning ? truncateAtWord(event.context.agentReasoning, AGENT_ERROR_TRUNCATE_LENGTH) : "No details provided")}`,
     ];
 
     if (event.context.suggestedActions.length > 0) {
@@ -102,7 +103,7 @@ export class EscalationManager {
     if (event.context.suggestedReply) {
       lines.push("");
       lines.push("*Suggested reply:*");
-      lines.push(`${esc(">")} ${esc(truncateAtWord(event.context.suggestedReply, 300))}`);
+      lines.push(`${esc(">")} ${esc(truncateAtWord(event.context.suggestedReply, TRUNCATE_MEDIUM))}`);
     }
 
     lines.push("");
