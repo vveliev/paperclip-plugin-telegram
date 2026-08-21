@@ -84,6 +84,8 @@ export const METRIC_NAMES = {
   commandsExecuted: "telegram_custom_commands_executed",
   suggestionsEmitted: "telegram_suggestions_emitted",
   interactionAnswered: "telegram_interaction_answers_submitted",
+  keyboardEnabled: "telegram_keyboard_enabled",
+  keyboardDisabled: "telegram_keyboard_disabled",
 } as const;
 
 // Cross-plugin ACP event names
