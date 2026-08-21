@@ -661,6 +661,21 @@ describe("/keyboard", () => {
     expect(sentMessages[0].options).toMatchObject({ keyboard: { isPersistent: true } });
   });
 
+  it("records an adoption metric on 'on'", async () => {
+    await call("123", "on", "private");
+    expect(metricsWritten.some(m => m.name === "telegram_keyboard_enabled")).toBe(true);
+  });
+
+  it("records an adoption metric on 'off'", async () => {
+    await call("123", "off", "private");
+    expect(metricsWritten.some(m => m.name === "telegram_keyboard_disabled")).toBe(true);
+  });
+
+  it("does not record an adoption metric for a rejected chat type", async () => {
+    await call("-100123", "on", "group");
+    expect(metricsWritten.some(m => m.name === "telegram_keyboard_enabled")).toBe(false);
+  });
+
   it("shows usage on an unrecognized argument", async () => {
     await call("123", "sideways", "private");
     expect(sentMessages[0].text).toBe("Usage: /keyboard on|off");
