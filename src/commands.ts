@@ -581,12 +581,14 @@ async function handleKeyboard(
         messageThreadId,
         keyboard: PERSISTENT_KEYBOARD,
       });
+      await ctx.metrics.write(METRIC_NAMES.keyboardEnabled, 1);
       break;
     case "off":
       await sendMessage(ctx, token, chatId, "Persistent keyboard disabled.", {
         messageThreadId,
         keyboard: { removeKeyboard: true },
       });
+      await ctx.metrics.write(METRIC_NAMES.keyboardDisabled, 1);
       break;
     default:
       await sendMessage(ctx, token, chatId, "Usage: /keyboard on|off", { messageThreadId });
