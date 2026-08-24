@@ -256,15 +256,24 @@ async function handleStatus(
     const agents = await ctx.agents.list({ companyId });
     // Agents report "running" or "idle" (and "paused"/"error" when unavailable).
     // Counting `status === "active"` matched nothing, so this line always read
-    // "0/N" no matter how many agents were working.
+    // "0/N" no matter how many agents were working; kept as a defensive
+    // fallback since it is a valid status, just not observed on current hosts.
+    //
+    // "available" is a positive filter (idle | running | active), not
+    // agents.length minus unavailable — a subtractive count silently counts
+    // any status this file does not yet know about (e.g. "terminated",
+    // "pending_approval") as available.
     const running = agents.filter((a: Agent) => a.status === "running" || a.status === "active");
+    const available = agents.filter(
+      (a: Agent) => a.status === "running" || a.status === "idle" || a.status === "active",
+    );
     const unavailable = agents.filter((a: Agent) => a.status === "paused" || a.status === "error");
     const issues = await ctx.issues.list({ companyId, limit: 10 });
     const doneIssues = issues.filter((i: Issue) => i.status === "done");
 
     const agentLine =
       `${escapeMarkdownV2("🤖")} Agents: *${running.length}* running, ` +
-      `*${escapeMarkdownV2(String(agents.length - unavailable.length))}* available` +
+      `*${escapeMarkdownV2(String(available.length))}* available` +
       (unavailable.length > 0 ? escapeMarkdownV2(` (${unavailable.length} paused/error)`) : "");
 
     const lines = [

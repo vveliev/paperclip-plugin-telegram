@@ -33,9 +33,9 @@ describe("/status agent counts", () => {
     sent.length = 0;
   });
 
-  it("counts running agents — the old filter looked for a status that never occurs", async () => {
-    // Agents report "running"/"idle"; nothing is ever "active", so the previous
-    // `status === "active"` filter reported 0 while agents were working.
+  it("counts running agents — the old filter looked for a status not observed on current hosts", async () => {
+    // Agents report "running"/"idle"; "active" is not observed on current hosts,
+    // so the previous `status === "active"` filter reported 0 while agents were working.
     const ctx = makeCtx([agent("running"), agent("idle"), agent("idle")]);
     await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
     expect(sent.at(-1)).toContain("1* running");
@@ -60,5 +60,24 @@ describe("/status agent counts", () => {
     const ctx = makeCtx([agent("idle"), agent("idle")]);
     await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
     expect(sent.at(-1)).not.toContain("paused/error");
+  });
+
+  it("does not count a terminated agent as available", async () => {
+    // A subtractive count (agents.length - unavailable.length) silently treats any
+    // status this file does not filter on as available — "terminated" being the
+    // clearest case: the agent still exists in the list, but will never run again.
+    const ctx = makeCtx([agent("running"), agent("idle"), agent("terminated")]);
+    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    const text = sent.at(-1)!;
+    expect(text).toContain("1* running");
+    expect(text).toContain("2* available");
+  });
+
+  it("does not count a pending_approval agent as available", async () => {
+    const ctx = makeCtx([agent("running"), agent("pending_approval")]);
+    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    const text = sent.at(-1)!;
+    expect(text).toContain("1* running");
+    expect(text).toContain("1* available");
   });
 });
