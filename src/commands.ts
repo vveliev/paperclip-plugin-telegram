@@ -2,6 +2,7 @@ import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@papercl
 import { sendMessage, escapeMarkdownV2, sendChatAction, type ReplyKeyboardMarkup } from "./telegram-api.js";
 import { METRIC_NAMES, DEFAULT_CONFIG } from "./constants.js";
 import { fetchAttention, sendAttentionList, describeDecisionsError } from "./decisions.js";
+import { countAgents } from "./agent-status.js";
 import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { str } from "./coerce.js";
@@ -255,26 +256,16 @@ async function handleStatus(
     const companyId = resolvedCompanyId ?? await resolveCompanyId(ctx, chatId);
     const agents = await ctx.agents.list({ companyId });
     // Agents report "running" or "idle" (and "paused"/"error" when unavailable).
-    // Counting `status === "active"` matched nothing, so this line always read
-    // "0/N" no matter how many agents were working; kept as a defensive
-    // fallback since it is a valid status, just not observed on current hosts.
-    //
-    // "available" is a positive filter (idle | running | active), not
-    // agents.length minus unavailable — a subtractive count silently counts
-    // any status this file does not yet know about (e.g. "terminated",
-    // "pending_approval") as available.
-    const running = agents.filter((a: Agent) => a.status === "running" || a.status === "active");
-    const available = agents.filter(
-      (a: Agent) => a.status === "running" || a.status === "idle" || a.status === "active",
-    );
-    const unavailable = agents.filter((a: Agent) => a.status === "paused" || a.status === "error");
+    // Counting `status === "active"` matched nothing on current hosts, so this
+    // line always read "0/N" no matter how many agents were working.
+    const counts = countAgents(agents);
     const issues = await ctx.issues.list({ companyId, limit: 10 });
     const doneIssues = issues.filter((i: Issue) => i.status === "done");
 
     const agentLine =
-      `${escapeMarkdownV2("🤖")} Agents: *${running.length}* running, ` +
-      `*${escapeMarkdownV2(String(available.length))}* available` +
-      (unavailable.length > 0 ? escapeMarkdownV2(` (${unavailable.length} paused/error)`) : "");
+      `${escapeMarkdownV2("🤖")} Agents: *${counts.working}* running, ` +
+      `*${escapeMarkdownV2(String(counts.available))}* available` +
+      (counts.unavailable > 0 ? escapeMarkdownV2(` (${counts.unavailable} paused/error)`) : "");
 
     const lines = [
       escapeMarkdownV2("📊") + " *Paperclip Status*",
