@@ -84,4 +84,23 @@ describe("/status agent counts", () => {
     await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
     expect(sent.at(-1)).not.toContain("paused/error");
   });
+
+  it("does not count a terminated agent as available", async () => {
+    // A subtractive count (agents.length - unavailable.length) silently treats any
+    // status this file does not filter on as available — "terminated" being the
+    // clearest case: the agent still exists in the list, but will never run again.
+    const ctx = makeCtx([agent("running"), agent("idle"), agent("terminated")]);
+    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    const text = sent.at(-1)!;
+    expect(text).toContain("1* running");
+    expect(text).toContain("2* available");
+  });
+
+  it("does not count a pending_approval agent as available", async () => {
+    const ctx = makeCtx([agent("running"), agent("pending_approval")]);
+    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    const text = sent.at(-1)!;
+    expect(text).toContain("1* running");
+    expect(text).toContain("1* available");
+  });
 });
