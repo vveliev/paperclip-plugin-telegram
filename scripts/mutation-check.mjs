@@ -99,7 +99,7 @@ const MUTATIONS = [
     file: "src/command-registry.ts",
     breaks:
       "The parked continuation is not consumed, so pressing Approve twice runs the rest of the workflow twice.",
-    find: '  await ctx.state.set({ scopeKind: "instance", stateKey }, null);',
+    find: '  await ctx.state.set({ scopeKind: "instance", stateKey }, { ...parked, resolved: true });',
     replace: "",
   },
   {
