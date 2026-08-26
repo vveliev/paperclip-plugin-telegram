@@ -4,7 +4,6 @@ import {
   type PluginContext,
   type PluginEvent,
   type PluginHealthDiagnostics,
-  type Agent,
   type Issue,
 } from "@paperclipai/plugin-sdk";
 import {
@@ -1285,7 +1284,7 @@ export const plugin = definePlugin({
           // filter above found nothing; do not resurrect it as a claim the data
           // cannot support.
           if (workingAgents.length > 0) {
-            const workingAgent = workingAgents[0]!.name;
+            const workingAgent = workingAgents[0].name;
             lines.push(`${escapeMarkdownV2("\u2b50")} Working: *${escapeMarkdownV2(workingAgent)}*`);
           }
 
