@@ -249,6 +249,30 @@ describe("answerCallbackQuery", () => {
     await expect(answerCallbackQuery(ctx, "tok", "cbq-1", "ok")).resolves.toBeUndefined();
     expect(ctx.logger.error).toHaveBeenCalled();
   });
+
+  it("does not log when Telegram accepts the answer", async () => {
+    responses = [{ ok: true }];
+    const ctx = makeCtx();
+
+    await answerCallbackQuery(ctx, "tok", "cbq-1", "ok");
+
+    expect(ctx.logger.error).not.toHaveBeenCalled();
+  });
+
+  it("logs Telegram's rejection reason instead of swallowing it (BLA-606)", async () => {
+    // A 200 response with ok:false (e.g. an expired callback query) never
+    // throws, so this branch is the only thing that makes a rejection
+    // observable -- without it the button press vanishes without a trace.
+    responses = [{ ok: false, error_code: 400, description: "query is too old" }];
+    const ctx = makeCtx();
+
+    await answerCallbackQuery(ctx, "tok", "cbq-1", "Approved");
+
+    expect(ctx.logger.error).toHaveBeenCalledWith(
+      "Telegram answerCallbackQuery rejected",
+      expect.objectContaining({ callbackQueryId: "cbq-1", error_code: 400, description: "query is too old" }),
+    );
+  });
 });
 
 describe("isForum", () => {
