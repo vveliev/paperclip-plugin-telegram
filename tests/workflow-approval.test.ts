@@ -204,6 +204,19 @@ describe("wait_approval gate", () => {
     expect(editedMessages[0].text).toContain("vagif");
   });
 
+  it("records the gate message so a later callback can resolve its company (BLA-606)", async () => {
+    // Without this, resolveCallbackCompanyId in worker.ts has no msg_ mapping
+    // to read for a wait_approval gate (only escalation.ts wrote one before
+    // this fix) and silently falls back to the instance-wide board-access
+    // company, which is wrong once more than one company is connected.
+    seedCommand();
+    const ctx = mockCtx();
+
+    await tryCustomCommand(ctx, "tok", "chat-1", "deploy", "", undefined, "co-1");
+
+    expect(stateStore["msg_chat-1_1"]).toMatchObject({ companyId: "co-1" });
+  });
+
   it("gives each gate in a run a distinct id", async () => {
     // Two gates parking in the same millisecond must not share a key, or
     // approving one resumes the other's continuation.

@@ -493,7 +493,7 @@ async function executeStep(
       // park in the same millisecond, and a collision would resume the wrong
       // continuation.
       const approvalId = `${Date.now()}_${step.id}`;
-      await sendMessage(ctx, token, chatId, prompt, {
+      const gateMessageId = await sendMessage(ctx, token, chatId, prompt, {
         messageThreadId,
         inlineKeyboard: [
           [
@@ -502,6 +502,16 @@ async function executeStep(
           ],
         ],
       });
+      // Mirrors escalation.ts's msg_ mapping: without it, resolveCallbackCompanyId
+      // in worker.ts has no way to attribute this callback to a company and
+      // silently falls back to the global board-access company, which is wrong
+      // in a multi-company deployment.
+      if (gateMessageId) {
+        await ctx.state.set(
+          { scopeKind: "instance", stateKey: `msg_${chatId}_${gateMessageId}` },
+          { entityId: approvalId, entityType: "workflow_approval", companyId },
+        );
+      }
       // executeWorkflow stores the continuation under this id and stops. The
       // state is written there rather than here because only the loop knows
       // which step comes next.

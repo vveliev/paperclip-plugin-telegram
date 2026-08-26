@@ -820,6 +820,87 @@ describe("setup() long polling", () => {
     expect(harness.calls.some((c) => c.path === "sendMessage")).toBe(false);
   });
 
+  it("resolves a parked wait_approval Approve callback delivered through the real polling loop (BLA-606)", async () => {
+    // Unlike tests/workflow-approval.test.ts, which calls
+    // resolveWorkflowApprovalCallback directly, this drives the button press
+    // through the exact path production uses: getUpdates -> pollUpdates's
+    // selectTelegramRuntimeForUpdate -> handleUpdate -> handleCallbackQuery.
+    const APPROVAL_ID = "1700000000000_s1";
+    const PARKED = {
+      commandName: "testapproval",
+      args: [],
+      results: [],
+      nextStepIndex: 1,
+      chatId: "1001",
+      messageThreadId: undefined,
+      companyId: "co-1",
+      createdAt: 1700000000000,
+    };
+    const COMMAND = {
+      name: "testapproval",
+      description: "Test wait_approval gate",
+      steps: [
+        { id: "s1", type: "wait_approval", prompt: "Approve this test?" },
+        { id: "s2", type: "send_message", text: "Gate passed - resumed after approval" },
+      ],
+      createdBy: "tester",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    const UPDATE = {
+      update_id: 777,
+      callback_query: {
+        id: "cb-approve-1",
+        from: { id: 42, username: "vagif" },
+        message: { message_id: 55, chat: { id: 1001 }, text: "Approve this test?" },
+        data: `cmd_approve_${APPROVAL_ID}`,
+      },
+    };
+
+    let getUpdatesCalls = 0;
+    const harness = makeHarness({
+      companies: [COMPANY],
+      perCompanyConfig: {
+        "co-1": { ...BASE_CONFIG, enableInbound: true, enableCommands: true, defaultChatId: "1001" },
+      },
+      fetchOverrides: {
+        getUpdates: async () => {
+          getUpdatesCalls++;
+          if (getUpdatesCalls === 1) return jsonResponse({ ok: true, result: [UPDATE] });
+          for (const fn of harness.events["plugin.stopping"] ?? []) await fn(undefined);
+          return jsonResponse({ ok: true, result: [] });
+        },
+        editMessageText: async () => jsonResponse({ ok: true }),
+      },
+    });
+
+    // Seed the parked workflow and command registry as if
+    // `/commands run testapproval` had already sent the Approve/Reject buttons.
+    harness.stateStore.set(
+      stateKeyOf({ scopeKind: "instance", stateKey: `cmd_approval_${APPROVAL_ID}` }),
+      PARKED,
+    );
+    harness.stateStore.set(
+      stateKeyOf({ scopeKind: "company", scopeId: "co-1", stateKey: "commands_co-1" }),
+      [COMMAND],
+    );
+
+    await plugin.definition.setup(harness.ctx);
+
+    await vi.waitFor(() => {
+      expect(getUpdatesCalls).toBeGreaterThanOrEqual(2);
+    });
+    await vi.waitFor(() => {
+      expect(harness.calls.some((c) => c.path === "answerCallbackQuery")).toBe(true);
+    });
+
+    expect(harness.calls.some((c) => c.path === "editMessageText")).toBe(true);
+    expect(
+      sendMessageCalls(harness.calls).some(
+        (c) => bodyOf(c).text === "Gate passed - resumed after approval",
+      ),
+    ).toBe(true);
+  });
+
   it("backs off after a fetch error and retries instead of exiting the loop", async () => {
     vi.useFakeTimers();
     try {
