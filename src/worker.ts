@@ -54,6 +54,7 @@ import {
   finalizeReplyRejection,
   isInteractionReplyMapping,
 } from "./interaction-answers.js";
+import { isDecisionsMoreCallback, resolveDecisionsMoreCallback } from "./decisions.js";
 import { AGENT_ERROR_DEDUPLICATION_WINDOW_MS, METRIC_NAMES } from "./constants.js";
 import { EscalationManager } from "./escalation.js";
 import type { EscalationEvent } from "./escalation.js";
@@ -145,6 +146,7 @@ type TelegramUpdate = {
       message_id: number;
       chat: { id: number };
       text?: string;
+      message_thread_id?: number;
     };
     data?: string;
   };
@@ -1621,8 +1623,9 @@ export async function handleUpdate(
     const companyId = await resolveCallbackCompanyId(ctx, update.callback_query);
     const effectiveConfig = await resolveConfig(ctx, config, companyId);
     const effectiveBaseUrl = effectiveConfig.paperclipBaseUrl || baseUrl;
+    const effectivePublicUrl = effectiveConfig.paperclipPublicUrl || effectiveBaseUrl || publicUrl;
     const boardApiToken = await resolveBoardApiToken(ctx, effectiveConfig, companyId);
-    await handleCallbackQuery(ctx, token, update.callback_query, effectiveBaseUrl, boardApiToken);
+    await handleCallbackQuery(ctx, token, update.callback_query, effectiveBaseUrl, boardApiToken, companyId, effectivePublicUrl);
     return;
   }
 
@@ -1781,6 +1784,8 @@ async function handleCallbackQuery(
   query: NonNullable<TelegramUpdate["callback_query"]>,
   baseUrl: string,
   boardApiToken?: string,
+  companyId?: string | null,
+  publicUrl?: string,
 ): Promise<void> {
   const data = query.data;
   if (!data) return;
@@ -1792,6 +1797,21 @@ async function handleCallbackQuery(
 
   if (isInteractionAnswerCallback(data)) {
     await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
+    return;
+  }
+
+  if (isDecisionsMoreCallback(data)) {
+    if (!chatId || !companyId) {
+      await answerCallbackQuery(ctx, token, query.id, "Could not load more.");
+      return;
+    }
+    await resolveDecisionsMoreCallback(ctx, token, data, query.id, chatId, {
+      messageThreadId: query.message?.message_thread_id,
+      baseUrl,
+      publicUrl,
+      companyId,
+      boardApiToken,
+    });
     return;
   }
 
