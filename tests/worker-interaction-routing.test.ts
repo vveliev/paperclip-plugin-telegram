@@ -4,6 +4,7 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 let sentMessages: Array<{ chatId: string; text: string }> = [];
 let resolveCalls: unknown[][] = [];
 let finalizeCalls: unknown[][] = [];
+let decisionsMoreCalls: unknown[][] = [];
 let stateStore: Record<string, unknown> = {};
 
 vi.mock("@paperclipai/plugin-sdk", async () => {
@@ -33,6 +34,16 @@ vi.mock("../src/interaction-answers.js", async () => {
     }),
     finalizeReplyRejection: vi.fn(async (...args: unknown[]) => {
       finalizeCalls.push(args);
+    }),
+  };
+});
+
+vi.mock("../src/decisions.js", async () => {
+  const actual = await vi.importActual("../src/decisions.js");
+  return {
+    ...actual,
+    resolveDecisionsMoreCallback: vi.fn(async (...args: unknown[]) => {
+      decisionsMoreCalls.push(args);
     }),
   };
 });
@@ -69,6 +80,7 @@ beforeEach(() => {
   sentMessages = [];
   resolveCalls = [];
   finalizeCalls = [];
+  decisionsMoreCalls = [];
   stateStore = {};
 });
 
@@ -92,6 +104,52 @@ describe("handleUpdate — interaction-answer callback routing", () => {
     expect(data).toBe("int_abc123_accept");
     expect(callbackQueryId).toBe("cbq-1");
     expect(messageId).toBe(5);
+  });
+});
+
+describe("handleUpdate — decisions 'Show more' callback routing (BLA-622)", () => {
+  it("routes a dec_more_-prefixed callback_query to resolveDecisionsMoreCallback with the resolved company", async () => {
+    const ctx = mockCtx();
+    stateStore[":msg_999_5"] = { companyId: "co-1" };
+
+    const update = {
+      update_id: 1,
+      callback_query: {
+        id: "cbq-1",
+        from: { id: 1, username: "alice" },
+        message: { message_id: 5, chat: { id: 999 }, text: "…and 70 more waiting.", message_thread_id: 42 },
+        data: "dec_more_5",
+      },
+    } as Parameters<typeof handleUpdate>[3];
+
+    await handleUpdate(ctx, "token", config, update, baseUrl);
+
+    expect(decisionsMoreCalls).toHaveLength(1);
+    const [, , data, callbackQueryId, chatId, opts] = decisionsMoreCalls[0] as [
+      unknown, unknown, string, string, string, { messageThreadId?: number; companyId: string; baseUrl: string },
+    ];
+    expect(data).toBe("dec_more_5");
+    expect(callbackQueryId).toBe("cbq-1");
+    expect(chatId).toBe("999");
+    expect(opts).toMatchObject({ messageThreadId: 42, companyId: "co-1", baseUrl });
+  });
+
+  it("answers 'Could not load more' instead of routing when the chat's company cannot be resolved", async () => {
+    const ctx = mockCtx();
+
+    const update = {
+      update_id: 1,
+      callback_query: {
+        id: "cbq-1",
+        from: { id: 1, username: "alice" },
+        message: { message_id: 5, chat: { id: 999 }, text: "…and 70 more waiting." },
+        data: "dec_more_5",
+      },
+    } as Parameters<typeof handleUpdate>[3];
+
+    await handleUpdate(ctx, "token", config, update, baseUrl);
+
+    expect(decisionsMoreCalls).toHaveLength(0);
   });
 });
 

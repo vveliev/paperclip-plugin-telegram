@@ -1,5 +1,5 @@
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-import { sendMessage, escapeMarkdownV2 } from "./telegram-api.js";
+import { sendMessage, answerCallbackQuery, escapeMarkdownV2 } from "./telegram-api.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { TRUNCATE_MEDIUM } from "./constants.js";
 import {
@@ -32,7 +32,16 @@ import {
  * can say what the decision IS rather than just that one exists.
  */
 
-const DEFAULT_DISPLAY_LIMIT = 5;
+// GET /companies/:id/attention accepts a `limit` query param (max 100, per
+// its OpenAPI spec) but no usable offset — it has a `cursor` param too, but
+// the response shape for a continuation token is undocumented, so pagination
+// here instead re-requests from the start with a wider `limit` each time and
+// slices off the slice already shown. Simple and correct as long as the feed
+// stays stably ranked between requests, which server-side ranking implies.
+export const DEFAULT_DISPLAY_LIMIT = 5;
+export const DECISIONS_PAGE_SIZE = 20;
+const MAX_ATTENTION_LIMIT = 100;
+const DECISIONS_MORE_PREFIX = "dec_more_";
 
 export type AttentionItem = {
   id: string;
@@ -51,6 +60,11 @@ export type AttentionItem = {
   interactionId?: string;
   issueId?: string;
   interactionKind?: string;
+  // Only set for sourceKind === "approval": subject.id here is the approval
+  // id itself, so unlike an interaction there is nothing further to fetch —
+  // it goes straight into the same /api/approvals/:id/approve call
+  // handleApprove already makes.
+  approvalId?: string;
 };
 
 export type AttentionResult = {
@@ -118,6 +132,7 @@ export function toAttentionItem(raw: Record<string, unknown>): AttentionItem {
   const sourceKind = typeof raw.sourceKind === "string" ? raw.sourceKind : "unknown";
   const subjectMetadata = (subject.metadata ?? {}) as Record<string, unknown>;
   const isInteraction = sourceKind === "issue_thread_interaction";
+  const isApproval = sourceKind === "approval";
 
   return {
     id: typeof raw.id === "string" ? raw.id : "",
@@ -134,6 +149,7 @@ export function toAttentionItem(raw: Record<string, unknown>): AttentionItem {
     interactionId: isInteraction && typeof subject.id === "string" ? subject.id : undefined,
     issueId: isInteraction && typeof subjectMetadata.issueId === "string" ? subjectMetadata.issueId : undefined,
     interactionKind: isInteraction && typeof subjectMetadata.kind === "string" ? subjectMetadata.kind : undefined,
+    approvalId: isApproval && typeof subject.id === "string" ? subject.id : undefined,
   };
 }
 
@@ -177,10 +193,17 @@ export async function fetchAttention(
   baseUrl: string,
   companyId: string,
   boardApiToken?: string,
+  limit?: number,
 ): Promise<AttentionResult> {
+  // Without an explicit limit, the endpoint applies its own undocumented
+  // default page size — observed live as returning only 5 items with
+  // totalCount in the dozens, well before this plugin ever slices for
+  // display. Callers must pass the count they actually intend to show so the
+  // server request and the display cap agree (BLA-622).
+  const query = limit ? `?limit=${Math.min(Math.max(1, Math.floor(limit)), MAX_ATTENTION_LIMIT)}` : "";
   const response = (await fetchPaperclipApi(
     ctx,
-    `${baseUrl}/api/companies/${companyId}/attention`,
+    `${baseUrl}/api/companies/${companyId}/attention${query}`,
     { method: "GET", headers: { ...buildPaperclipAuthHeaders(boardApiToken) } },
   ));
 
@@ -256,6 +279,10 @@ export function renderAttentionItem(
   return lines.join("\n");
 }
 
+function approveButtonRow(approvalId: string) {
+  return [[{ text: "✅ Approve", callback_data: `approve_${approvalId}` }]];
+}
+
 export async function sendAttentionList(
   ctx: PluginContext,
   token: string,
@@ -265,6 +292,10 @@ export async function sendAttentionList(
     messageThreadId?: number;
     publicUrl?: string;
     limit?: number;
+    // How many items a prior call already sent — set only by the "Show more"
+    // callback, so that page re-renders only the items past what is already
+    // on screen instead of repeating the first page (BLA-622).
+    offset?: number;
     baseUrl?: string;
     companyId?: string;
     boardApiToken?: string;
@@ -279,19 +310,24 @@ export async function sendAttentionList(
     return;
   }
 
+  const offset = opts.offset ?? 0;
   const limit = opts.limit ?? DEFAULT_DISPLAY_LIMIT;
-  for (const item of items.slice(0, limit)) {
-    // Only issue_thread_interaction items are candidates — approvals,
-    // reviews, blockers etc. resolve through entirely different endpoints
-    // this plugin does not call (BLA-154's scope is ask_user_questions and
-    // request_confirmation specifically).
+  for (const item of items.slice(offset, limit)) {
+    // issue_thread_interaction and approval are the two kinds this plugin can
+    // resolve inline — reviews, blockers etc. resolve through endpoints this
+    // plugin does not call (BLA-154 scoped the former; BLA-622 added the
+    // latter, reusing the exact endpoint /approve already calls).
     const answerable = item.sourceKind === "issue_thread_interaction" && item.inlineResolvable && opts.baseUrl
       ? await tryBuildAnswerableInteraction(ctx, opts.baseUrl, item, opts.boardApiToken)
       : null;
+    const approvable = item.sourceKind === "approval" && item.inlineResolvable && item.approvalId
+      ? item.approvalId
+      : null;
 
-    await sendMessage(ctx, token, chatId, renderAttentionItem(item, opts.publicUrl, { includeOpenLink: !answerable }), {
+    await sendMessage(ctx, token, chatId, renderAttentionItem(item, opts.publicUrl, { includeOpenLink: !answerable && !approvable }), {
       parseMode: "MarkdownV2",
       messageThreadId: opts.messageThreadId,
+      inlineKeyboard: approvable ? approveButtonRow(approvable) : undefined,
     });
 
     if (answerable && item.issueId) {
@@ -303,10 +339,71 @@ export async function sendAttentionList(
     }
   }
 
-  if (totalCount > limit) {
-    await sendMessage(ctx, token, chatId, `…and ${totalCount - limit} more waiting.`, {
+  // The count actually rendered so far — capped by what the feed returned,
+  // since a widened `limit` can still exceed totalCount.
+  const shownThrough = Math.min(limit, items.length);
+  if (totalCount > shownThrough) {
+    const remaining = totalCount - shownThrough;
+    // Past MAX_ATTENTION_LIMIT the endpoint's own cap means a wider `limit`
+    // can no longer pull in more items, so there is nothing "Show more" could
+    // do — drop the button rather than offer a tap that changes nothing.
+    const canPageFurther = shownThrough < MAX_ATTENTION_LIMIT;
+    await sendMessage(ctx, token, chatId, `…and ${remaining} more waiting.`, {
       messageThreadId: opts.messageThreadId,
+      inlineKeyboard: canPageFurther
+        ? [[{ text: `Show more (+${Math.min(DECISIONS_PAGE_SIZE, remaining)})`, callback_data: `${DECISIONS_MORE_PREFIX}${shownThrough}` }]]
+        : undefined,
     });
+  }
+}
+
+export function isDecisionsMoreCallback(data: string): boolean {
+  return data.startsWith(DECISIONS_MORE_PREFIX);
+}
+
+/**
+ * Resolve a "Show more" tap. The callback carries only how many items are
+ * already on screen (`offset`) — everything else (company, board token,
+ * base URL) is re-resolved the same way the /decisions command itself
+ * resolves it, same as resolveInteractionAnswerCallback does for answers.
+ */
+export async function resolveDecisionsMoreCallback(
+  ctx: PluginContext,
+  token: string,
+  data: string,
+  callbackQueryId: string,
+  chatId: string,
+  opts: {
+    messageThreadId?: number;
+    baseUrl: string;
+    publicUrl?: string;
+    companyId: string;
+    boardApiToken?: string;
+  },
+): Promise<void> {
+  const offset = Number(data.slice(DECISIONS_MORE_PREFIX.length));
+  if (!Number.isInteger(offset) || offset < 0) {
+    await answerCallbackQuery(ctx, token, callbackQueryId, "Could not load more.");
+    return;
+  }
+
+  await answerCallbackQuery(ctx, token, callbackQueryId, "Loading more…");
+  const limit = Math.min(offset + DECISIONS_PAGE_SIZE, MAX_ATTENTION_LIMIT);
+
+  try {
+    const found = await fetchAttention(ctx, opts.baseUrl, opts.companyId, opts.boardApiToken, limit);
+    await sendAttentionList(ctx, token, chatId, found, {
+      messageThreadId: opts.messageThreadId,
+      publicUrl: opts.publicUrl,
+      baseUrl: opts.baseUrl,
+      companyId: opts.companyId,
+      boardApiToken: opts.boardApiToken,
+      limit,
+      offset,
+    });
+  } catch (err) {
+    ctx.logger.error("Failed to load more decisions", { error: String(err) });
+    await sendMessage(ctx, token, chatId, describeDecisionsError(err), { messageThreadId: opts.messageThreadId });
   }
 }
 

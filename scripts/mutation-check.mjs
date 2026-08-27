@@ -87,6 +87,42 @@ const MUTATIONS = [
     replace: "  const verbs: string[] = [];",
   },
   {
+    id: "approval-inline-resolvable-ignored",
+    file: "src/decisions.ts",
+    breaks:
+      "An approval the host marked inlineResolvable: false gets an Approve button anyway, offering an action the host explicitly declined to expose inline (BLA-622).",
+    find: `    const approvable = item.sourceKind === "approval" && item.inlineResolvable && item.approvalId
+      ? item.approvalId
+      : null;`,
+    replace: `    const approvable = item.sourceKind === "approval" && item.approvalId
+      ? item.approvalId
+      : null;`,
+  },
+  {
+    id: "decisions-pagination-repeats-first-page",
+    file: "src/decisions.ts",
+    breaks:
+      "Tapping 'Show more' resends the items already on screen instead of only the new ones, because the render offset is silently dropped (BLA-622).",
+    find: "  for (const item of items.slice(offset, limit)) {",
+    replace: "  for (const item of items.slice(0, limit)) {",
+  },
+  {
+    id: "decisions-limit-uncapped",
+    file: "src/decisions.ts",
+    breaks:
+      "A /decisions limit above the attention endpoint's documented 100-item cap is sent unclamped, which the live API is free to reject instead of silently truncating (BLA-622).",
+    find: '  const query = limit ? `?limit=${Math.min(Math.max(1, Math.floor(limit)), MAX_ATTENTION_LIMIT)}` : "";',
+    replace: '  const query = limit ? `?limit=${limit}` : "";',
+  },
+  {
+    id: "decisions-more-offset-unvalidated",
+    file: "src/decisions.ts",
+    breaks:
+      "A malformed dec_more_ callback (non-numeric or negative offset) is treated as valid instead of failing safely, producing a nonsensical fetch instead of the 'Could not load more' message (BLA-622).",
+    find: "  if (!Number.isInteger(offset) || offset < 0) {",
+    replace: "  if (false) {",
+  },
+  {
     id: "approval-gate-not-enforced",
     file: "src/command-registry.ts",
     breaks:

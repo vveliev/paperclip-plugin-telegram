@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { handleCommand, BOT_COMMANDS, HELP_GROUPS, handleConnectTopic, getTopicForProject, resolveNotificationThreadId } from "../src/commands.js";
+import { handleCommand, BOT_COMMANDS, HELP_GROUPS, handleConnectTopic, getTopicForProject, resolveNotificationThreadId, parseDecisionsLimit } from "../src/commands.js";
+import { DEFAULT_DISPLAY_LIMIT, DECISIONS_PAGE_SIZE } from "../src/decisions.js";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 let sentMessages: Array<{ chatId: string; text: string; options?: Record<string, unknown> }> = [];
@@ -143,6 +144,26 @@ describe("handleCommand", () => {
     await handleCommand(ctx, "token", "123", "agents", "");
     expect(sentMessages.length).toBe(1);
     expect(sentMessages[0].text).toContain("Agents");
+  });
+
+  it("routes /decisions with no arg to a default-sized attention fetch", async () => {
+    stateStore["chat_123"] = { companyId: "co-1" };
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "decisions", "", undefined, "http://example.com");
+    expect(ctx.http.fetch).toHaveBeenCalledWith(
+      `http://example.com/api/companies/co-1/attention?limit=${DEFAULT_DISPLAY_LIMIT}`,
+      expect.any(Object),
+    );
+  });
+
+  it("routes /decisions with a numeric arg to a widened attention fetch (BLA-622)", async () => {
+    stateStore["chat_123"] = { companyId: "co-1" };
+    const ctx = mockCtx();
+    await handleCommand(ctx, "token", "123", "decisions", "20", undefined, "http://example.com");
+    expect(ctx.http.fetch).toHaveBeenCalledWith(
+      "http://example.com/api/companies/co-1/attention?limit=20",
+      expect.any(Object),
+    );
   });
 
   it("routes /approve without args shows usage", async () => {
@@ -702,6 +723,30 @@ describe("/keyboard", () => {
   it("rejects when chat type is unknown/unset", async () => {
     await call("123", "on", undefined);
     expect(sentMessages[0].text).toContain("direct message");
+  });
+});
+
+describe("parseDecisionsLimit (BLA-622)", () => {
+  it("defaults to DEFAULT_DISPLAY_LIMIT with no argument", () => {
+    expect(parseDecisionsLimit("")).toBe(DEFAULT_DISPLAY_LIMIT);
+    expect(parseDecisionsLimit("   ")).toBe(DEFAULT_DISPLAY_LIMIT);
+  });
+
+  it("treats 'more' as one page past the default, case-insensitively", () => {
+    expect(parseDecisionsLimit("more")).toBe(DEFAULT_DISPLAY_LIMIT + DECISIONS_PAGE_SIZE);
+    expect(parseDecisionsLimit("MORE")).toBe(DEFAULT_DISPLAY_LIMIT + DECISIONS_PAGE_SIZE);
+  });
+
+  it("takes an explicit positive integer as the limit", () => {
+    expect(parseDecisionsLimit("20")).toBe(20);
+    expect(parseDecisionsLimit(" 100 ")).toBe(100);
+  });
+
+  it("falls back to the default for unparseable or non-positive input, rather than erroring", () => {
+    expect(parseDecisionsLimit("banana")).toBe(DEFAULT_DISPLAY_LIMIT);
+    expect(parseDecisionsLimit("0")).toBe(DEFAULT_DISPLAY_LIMIT);
+    expect(parseDecisionsLimit("-5")).toBe(DEFAULT_DISPLAY_LIMIT);
+    expect(parseDecisionsLimit("5.5")).toBe(DEFAULT_DISPLAY_LIMIT);
   });
 });
 

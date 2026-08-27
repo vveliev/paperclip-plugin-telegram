@@ -2,14 +2,20 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 const sent: string[] = [];
+const sentOptions: Array<Record<string, unknown> | undefined> = [];
 const apiCalls: string[] = [];
+const answerCallbackCalls: Array<{ callbackQueryId: string; text: string }> = [];
 let response: unknown = { totalCount: 0, items: [] };
 let shouldThrow: Error | null = null;
 
 vi.mock("../src/telegram-api.js", () => ({
-  sendMessage: vi.fn(async (_c: unknown, _t: string, _chat: string, text: string) => {
+  sendMessage: vi.fn(async (_c: unknown, _t: string, _chat: string, text: string, options?: Record<string, unknown>) => {
     sent.push(text);
+    sentOptions.push(options);
     return { ok: true };
+  }),
+  answerCallbackQuery: vi.fn(async (_c: unknown, _t: string, callbackQueryId: string, text: string) => {
+    answerCallbackCalls.push({ callbackQueryId, text });
   }),
   escapeMarkdownV2: (s: string) => s,
 }));
@@ -44,6 +50,9 @@ const {
   describeSourceKind,
   describeDecisionsError,
   toAttentionItem,
+  isDecisionsMoreCallback,
+  resolveDecisionsMoreCallback,
+  DECISIONS_PAGE_SIZE,
 } = await import("../src/decisions.js");
 
 function makeCtx(): PluginContext {
@@ -91,9 +100,28 @@ const blockerItem = {
   detail: { kind: "blocker", blockedTaskCount: 0 },
 };
 
+const approvalItem = {
+  id: "approval:approval:5f3c9a11",
+  sourceKind: "approval",
+  subject: {
+    kind: "approval",
+    id: "5f3c9a11-9c3e-4c4a-8b1a-1234567890ab",
+    title: "Deploy backend to prod",
+    href: "/BLA/issues/BLA-200#approval-5f3c9a11",
+  },
+  relatedIssue: { identifier: "BLA-200" },
+  whyNow: "An approval is waiting on you.",
+  severity: "medium",
+  inlineResolvable: true,
+  decisionVerbs: [{ id: "approve", label: "Approve" }],
+  detail: { kind: "approval", summary: "Deploy backend to prod" },
+};
+
 beforeEach(() => {
   sent.length = 0;
+  sentOptions.length = 0;
   apiCalls.length = 0;
+  answerCallbackCalls.length = 0;
   shouldThrow = null;
   response = { totalCount: 0, items: [] };
   answerableSendCalls.length = 0;
@@ -179,6 +207,24 @@ describe("fetchAttention", () => {
     const { items } = await fetchAttention(makeCtx(), "http://x", "c1", "tok");
 
     expect(items[0].verbs).toEqual([]);
+  });
+
+  it("omits the limit query param when no limit is given", async () => {
+    await fetchAttention(makeCtx(), "http://x", "c1", "tok");
+    expect(apiCalls[0]).toBe("http://x/api/companies/c1/attention");
+  });
+
+  it("passes an explicit limit through, so the server returns enough items to display (BLA-622)", async () => {
+    // The bug this closes: this plugin used to fetch with no limit at all, so
+    // "totalCount 75, items 5" was possible even before any client-side
+    // slicing — display and fetch must ask for the same count.
+    await fetchAttention(makeCtx(), "http://x", "c1", "tok", 20);
+    expect(apiCalls[0]).toBe("http://x/api/companies/c1/attention?limit=20");
+  });
+
+  it("clamps a limit above the endpoint's documented max of 100", async () => {
+    await fetchAttention(makeCtx(), "http://x", "c1", "tok", 500);
+    expect(apiCalls[0]).toBe("http://x/api/companies/c1/attention?limit=100");
   });
 });
 
@@ -423,14 +469,11 @@ describe("sendAttentionList — inline answering (BLA-154)", () => {
     expect(sent[0]).toContain("https://paperclip.example/BLA/issues/BLA-134");
   });
 
-  it("does not attempt an inline answer for non-interaction items, even when inlineResolvable", async () => {
-    const approvalItem = {
-      ...toItem(blockerItem),
-      sourceKind: "approval",
-      inlineResolvable: true,
-    };
-
-    await sendAttentionList(makeCtx(), "tok", "chat-1", { items: [approvalItem], totalCount: 1 }, {
+  it("does not fetch or send an interaction-style answerable prompt for an approval item", async () => {
+    // Approvals are inline-resolvable (BLA-622), but through a button on the
+    // item's own message, not through interaction-answers.js's fetch-then-park
+    // flow — that machinery is issue_thread_interaction-only.
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items: [toItem(approvalItem)], totalCount: 1 }, {
       baseUrl: "http://x",
       boardApiToken: "tok",
       companyId: "co-1",
@@ -445,6 +488,144 @@ describe("sendAttentionList — inline answering (BLA-154)", () => {
     await sendAttentionList(makeCtx(), "tok", "chat-1", { items, totalCount: 1 }, { companyId: "co-1" });
 
     expect(answerableSendCalls).toHaveLength(0);
+  });
+});
+
+describe("toAttentionItem — approval fields (BLA-622)", () => {
+  it("extracts approvalId from subject.id for an approval item", () => {
+    const item = toAttentionItem(approvalItem);
+    expect(item.sourceKind).toBe("approval");
+    expect(item.approvalId).toBe("5f3c9a11-9c3e-4c4a-8b1a-1234567890ab");
+  });
+
+  it("leaves approvalId undefined for a non-approval item", () => {
+    expect(toAttentionItem(questionItem).approvalId).toBeUndefined();
+    expect(toAttentionItem(blockerItem).approvalId).toBeUndefined();
+  });
+});
+
+describe("sendAttentionList — inline approving (BLA-622)", () => {
+  it("attaches an Approve button that calls the same endpoint /approve uses, and drops the Open link", async () => {
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items: [toItem(approvalItem)], totalCount: 1 }, {
+      baseUrl: "http://x",
+      boardApiToken: "tok",
+      companyId: "co-1",
+      publicUrl: "https://paperclip.example",
+    });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).not.toContain("https://paperclip.example/BLA/issues/BLA-200");
+    expect(sentOptions[0]).toMatchObject({
+      inlineKeyboard: [[{ text: "✅ Approve", callback_data: "approve_5f3c9a11-9c3e-4c4a-8b1a-1234567890ab" }]],
+    });
+  });
+
+  it("keeps the Open link and adds no button when the host marks the approval not inline-resolvable", async () => {
+    const notInline = { ...approvalItem, inlineResolvable: false };
+
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items: [toItem(notInline)], totalCount: 1 }, {
+      baseUrl: "http://x",
+      boardApiToken: "tok",
+      companyId: "co-1",
+      publicUrl: "https://paperclip.example",
+    });
+
+    expect(sent[0]).toContain("https://paperclip.example/BLA/issues/BLA-200");
+    expect(sentOptions[0]).toMatchObject({ inlineKeyboard: undefined });
+  });
+
+  it("adds no button when the feed sent no usable subject.id", async () => {
+    const noId = { ...approvalItem, subject: { ...approvalItem.subject, id: undefined } };
+
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items: [toItem(noId)], totalCount: 1 }, {
+      baseUrl: "http://x",
+      boardApiToken: "tok",
+      companyId: "co-1",
+    });
+
+    expect(sentOptions[0]).toMatchObject({ inlineKeyboard: undefined });
+  });
+});
+
+describe("sendAttentionList — pagination (BLA-622)", () => {
+  it("slices from offset instead of the start, so a later page does not repeat the first", async () => {
+    const items = Array.from({ length: 10 }, () => toItem(questionItem));
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items, totalCount: 30 }, { limit: 8, offset: 5 });
+
+    // items[5..8): 3 messages, plus the "…N more waiting" trailer.
+    expect(sent).toHaveLength(4);
+    expect(sent.at(-1)).toContain("22 more");
+  });
+
+  it("attaches a Show more button carrying the cumulative shown count as the next offset", async () => {
+    const items = Array.from({ length: 5 }, () => toItem(questionItem));
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items, totalCount: 75 }, { limit: 5 });
+
+    const trailerOptions = sentOptions.at(-1);
+    expect(trailerOptions).toMatchObject({
+      inlineKeyboard: [[{ text: `Show more (+${DECISIONS_PAGE_SIZE})`, callback_data: "dec_more_5" }]],
+    });
+  });
+
+  it("caps the Show more offer to what remains, once fewer than a full page is left", async () => {
+    const items = Array.from({ length: 5 }, () => toItem(questionItem));
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items, totalCount: 8 }, { limit: 5 });
+
+    const trailerOptions = sentOptions.at(-1) as { inlineKeyboard: Array<Array<{ text: string }>> };
+    expect(trailerOptions.inlineKeyboard[0][0].text).toBe("Show more (+3)");
+  });
+
+  it("drops the Show more button once the endpoint's own cap is reached", async () => {
+    const items = Array.from({ length: 100 }, () => toItem(questionItem));
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items, totalCount: 500 }, { limit: 100 });
+
+    expect(sent.at(-1)).toContain("400 more");
+    expect(sentOptions.at(-1)).toMatchObject({ inlineKeyboard: undefined });
+  });
+
+  it("sends no trailer at all once everything has been shown", async () => {
+    const items = Array.from({ length: 5 }, () => toItem(questionItem));
+    await sendAttentionList(makeCtx(), "tok", "chat-1", { items, totalCount: 5 }, { limit: 5 });
+
+    expect(sent).toHaveLength(5);
+  });
+});
+
+describe("isDecisionsMoreCallback", () => {
+  it("recognises the dec_more_ prefix and rejects anything else", () => {
+    expect(isDecisionsMoreCallback("dec_more_5")).toBe(true);
+    expect(isDecisionsMoreCallback("approve_abc")).toBe(false);
+    expect(isDecisionsMoreCallback("int_abc_accept")).toBe(false);
+  });
+});
+
+describe("resolveDecisionsMoreCallback", () => {
+  const opts = { baseUrl: "http://x", publicUrl: "https://paperclip.example", companyId: "co-1", boardApiToken: "tok" };
+
+  it("answers 'Could not load more' and fetches nothing for a malformed offset", async () => {
+    await resolveDecisionsMoreCallback(makeCtx(), "tok", "dec_more_notanumber", "cbq-1", "chat-1", opts);
+
+    expect(answerCallbackCalls).toEqual([{ callbackQueryId: "cbq-1", text: "Could not load more." }]);
+    expect(apiCalls).toHaveLength(0);
+  });
+
+  it("fetches the widened page, capped at the endpoint's own max, and renders past the given offset", async () => {
+    response = { totalCount: 75, items: Array.from({ length: 25 }, () => questionItem) };
+
+    await resolveDecisionsMoreCallback(makeCtx(), "tok", "dec_more_5", "cbq-1", "chat-1", opts);
+
+    expect(answerCallbackCalls[0]).toMatchObject({ callbackQueryId: "cbq-1", text: "Loading more…" });
+    expect(apiCalls[0]).toBe(`http://x/api/companies/co-1/attention?limit=${5 + DECISIONS_PAGE_SIZE}`);
+    // 25 items fetched, offset 5 -> renders items[5..25) = 20 messages, plus a further Show more trailer.
+    expect(sent).toHaveLength(21);
+  });
+
+  it("reports a readable error instead of throwing when the fetch fails", async () => {
+    shouldThrow = new Error('Paperclip API request failed with 403: {"error":"Board access required"}');
+
+    await resolveDecisionsMoreCallback(makeCtx(), "tok", "dec_more_5", "cbq-1", "chat-1", opts);
+
+    expect(sent.at(-1)).toContain("no board access");
   });
 });
 

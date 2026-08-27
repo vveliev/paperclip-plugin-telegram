@@ -54,6 +54,7 @@ import {
   finalizeReplyRejection,
   isInteractionReplyMapping,
 } from "./interaction-answers.js";
+import { isDecisionsMoreCallback, resolveDecisionsMoreCallback } from "./decisions.js";
 import { AGENT_ERROR_DEDUPLICATION_WINDOW_MS, DEFAULT_CONFIG, METRIC_NAMES } from "./constants.js";
 import { EscalationManager } from "./escalation.js";
 import type { EscalationEvent } from "./escalation.js";
@@ -140,6 +141,7 @@ type TelegramUpdate = {
       message_id: number;
       chat: { id: number };
       text?: string;
+      message_thread_id?: number;
     };
     data?: string;
   };
@@ -1504,7 +1506,7 @@ export async function handleUpdate(
   if (update.callback_query) {
     const companyId = await resolveCallbackCompanyId(ctx, update.callback_query);
     const boardApiToken = await resolveBoardApiToken(ctx, config, companyId);
-    await handleCallbackQuery(ctx, token, update.callback_query, baseUrl, boardApiToken);
+    await handleCallbackQuery(ctx, token, update.callback_query, baseUrl, boardApiToken, companyId, publicUrl);
     return;
   }
 
@@ -1655,6 +1657,8 @@ async function handleCallbackQuery(
   query: NonNullable<TelegramUpdate["callback_query"]>,
   baseUrl: string,
   boardApiToken?: string,
+  companyId?: string | null,
+  publicUrl?: string,
 ): Promise<void> {
   const data = query.data;
   if (!data) return;
@@ -1673,6 +1677,21 @@ async function handleCallbackQuery(
 
   if (isInteractionAnswerCallback(data)) {
     await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
+    return;
+  }
+
+  if (isDecisionsMoreCallback(data)) {
+    if (!chatId || !companyId) {
+      await answerCallbackQuery(ctx, token, query.id, "Could not load more.");
+      return;
+    }
+    await resolveDecisionsMoreCallback(ctx, token, data, query.id, chatId, {
+      messageThreadId: query.message?.message_thread_id,
+      baseUrl,
+      publicUrl,
+      companyId,
+      boardApiToken,
+    });
     return;
   }
 
