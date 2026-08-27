@@ -45,6 +45,7 @@ describe("Telegram polling dispatch", () => {
       escalationChatId: "-1005",
       allowedTelegramChatIds: ["-1006"],
       briefAgentChatIds: ["-1007"],
+      activityChatId: "-1008",
     })].sort()).toEqual([
       "-1001",
       "-1002",
@@ -53,7 +54,30 @@ describe("Telegram polling dispatch", () => {
       "-1005",
       "-1006",
       "-1007",
+      "-1008",
     ]);
+  });
+
+  it("routes an inbound update from a company's own Activity chat (BLA-618)", () => {
+    // A company that splits notifications into a separate Activity chat
+    // still needs inbound commands/callbacks sent there to resolve back to
+    // the right company runtime, the same as approvals/errors chats already do.
+    const activityRuntime = {
+      companyId: "acme",
+      config: {
+        defaultChatId: "-2001",
+        activityChatId: "-2002",
+      },
+    };
+    const runtime = selectTelegramRuntimeForUpdate(
+      [pacoRuntime, activityRuntime],
+      {
+        update_id: 1,
+        message: { chat: { id: -2002 } },
+      },
+    );
+
+    expect(runtime?.companyId).toBe("acme");
   });
 
   it("selects the matching company runtime before allowlist handling", () => {

@@ -77,6 +77,8 @@ type TelegramConfig = {
   approvalsTopicId: string;
   errorsChatId: string;
   errorsTopicId: string;
+  activityChatId: string;
+  activityTopicId: string;
   digestChatId: string;
   digestTopicId: string;
   paperclipBaseUrl: string;
@@ -446,6 +448,8 @@ export async function resolveCompanyRuntimes(
       "approvalsTopicId",
       "errorsChatId",
       "errorsTopicId",
+      "activityChatId",
+      "activityTopicId",
       "digestChatId",
       "digestTopicId",
       "escalationChatId",
@@ -590,7 +594,7 @@ export function parseTopicId(value?: string): number | undefined {
 
 export function validateConfiguredTopicIds(config: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  for (const key of ["approvalsTopicId", "errorsTopicId", "digestTopicId"]) {
+  for (const key of ["approvalsTopicId", "errorsTopicId", "activityTopicId", "digestTopicId"]) {
     const value = config[key];
     if (value === undefined || value === null || value === "") continue;
     if (typeof value !== "string" || !parseTopicId(value)) {
@@ -984,7 +988,7 @@ export const plugin = definePlugin({
       ctx.events.on("issue.created", async (event: PluginEvent) => {
         const effectiveConfig = await resolveConfig(ctx, config, event.companyId);
         if (!effectiveConfig.notifyOnIssueCreated) return;
-        await notify(event, formatIssueCreated);
+        await notify(event, formatIssueCreated, effectiveConfig.activityChatId, effectiveConfig.activityTopicId);
       });
     }
 
@@ -1019,7 +1023,7 @@ export const plugin = definePlugin({
             }
           } catch { /* best effort */ }
         }
-        await notify(event, formatIssueDone);
+        await notify(event, formatIssueDone, effectiveConfig.activityChatId, effectiveConfig.activityTopicId);
       });
     }
 
@@ -1064,7 +1068,7 @@ export const plugin = definePlugin({
           } catch { /* best effort */ }
         }
 
-        await notify(event, formatIssueAssigned);
+        await notify(event, formatIssueAssigned, effectiveConfig.activityChatId, effectiveConfig.activityTopicId);
       });
     }
 
@@ -1179,7 +1183,7 @@ export const plugin = definePlugin({
         }
         await enrichAgentName(event);
         await enrichRunIssue(event);
-        await notify(event, formatAgentRunStarted);
+        await notify(event, formatAgentRunStarted, effectiveConfig.activityChatId, effectiveConfig.activityTopicId);
       });
     }
     {
@@ -1190,7 +1194,7 @@ export const plugin = definePlugin({
         }
         await enrichAgentName(event);
         await enrichRunIssue(event);
-        await notify(event, formatAgentRunFinished);
+        await notify(event, formatAgentRunFinished, effectiveConfig.activityChatId, effectiveConfig.activityTopicId);
       });
     }
 

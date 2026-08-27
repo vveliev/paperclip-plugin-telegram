@@ -34,6 +34,8 @@ const BASE_CONFIG: Record<string, unknown> = {
   approvalsTopicId: "",
   errorsChatId: "",
   errorsTopicId: "",
+  activityChatId: "",
+  activityTopicId: "",
   digestChatId: "",
   digestTopicId: "",
   paperclipBaseUrl: "",
@@ -508,6 +510,141 @@ describe("setup() event subscriptions", () => {
     );
 
     expect(sendMessageCalls(harness.calls)).toHaveLength(1);
+  });
+});
+
+describe("setup() Activity topic routing (BLA-618)", () => {
+  // Routine, FYI-only notices (issue created/done/assigned, agent run
+  // started/finished) should land in the configured Activity chat/topic
+  // instead of the default chat, so they stop burying approvals and errors
+  // in the same stream. Approvals and errors already have their own
+  // dedicated approvalsChatId/errorsChatId route and must stay on it.
+  const ACTIVITY_CONFIG = {
+    ...BASE_CONFIG,
+    defaultChatId: "1001",
+    activityChatId: "2002",
+    activityTopicId: "77",
+    notifyOnIssueCreated: true,
+    notifyOnIssueDone: true,
+    notifyOnAgentRunStarted: true,
+    notifyOnAgentRunFinished: true,
+    notifyOnApprovalCreated: true,
+    notifyOnAgentError: true,
+    approvalsChatId: "3003",
+    approvalsTopicId: "88",
+    errorsChatId: "4004",
+    errorsTopicId: "99",
+  };
+
+  it("routes issue.created through the Activity chat/topic, not the default chat", async () => {
+    const harness = makeHarness({
+      companies: [COMPANY],
+      perCompanyConfig: { "co-1": ACTIVITY_CONFIG },
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await emit(harness, "issue.created", makeEvent({ payload: { identifier: "ACME-1", title: "New issue" } }));
+
+    const [call] = sendMessageCalls(harness.calls);
+    const body = bodyOf(call);
+    expect(body.chat_id).toBe("2002");
+    expect(body.message_thread_id).toBe(77);
+  });
+
+  it("routes issue.updated(done) through the Activity chat/topic", async () => {
+    const harness = makeHarness({
+      companies: [COMPANY],
+      perCompanyConfig: { "co-1": ACTIVITY_CONFIG },
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await emit(
+      harness,
+      "issue.updated",
+      makeEvent({ payload: { identifier: "ACME-1", title: "T", status: "done", comment: "shipped" } }),
+    );
+
+    const [call] = sendMessageCalls(harness.calls);
+    const body = bodyOf(call);
+    expect(body.chat_id).toBe("2002");
+    expect(body.message_thread_id).toBe(77);
+  });
+
+  it("routes agent.run.started and agent.run.finished through the Activity chat/topic", async () => {
+    const harness = makeHarness({
+      companies: [COMPANY],
+      perCompanyConfig: { "co-1": ACTIVITY_CONFIG },
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await emit(
+      harness,
+      "agent.run.started",
+      makeEvent({ eventType: "agent.run.started", entityId: "agent-1", entityType: "agent", payload: { agentId: "agent-1" } }),
+    );
+    await emit(
+      harness,
+      "agent.run.finished",
+      makeEvent({ eventType: "agent.run.finished", entityId: "agent-1", entityType: "agent", payload: { agentId: "agent-1" } }),
+    );
+
+    const [started, finished] = sendMessageCalls(harness.calls);
+    expect(bodyOf(started).chat_id).toBe("2002");
+    expect(bodyOf(started).message_thread_id).toBe(77);
+    expect(bodyOf(finished).chat_id).toBe("2002");
+    expect(bodyOf(finished).message_thread_id).toBe(77);
+  });
+
+  it("still routes approval.created and agent.run.failed to their own chats, not Activity", async () => {
+    const harness = makeHarness({
+      companies: [COMPANY],
+      perCompanyConfig: { "co-1": ACTIVITY_CONFIG },
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await emit(
+      harness,
+      "approval.created",
+      makeEvent({
+        eventType: "approval.created",
+        entityId: "approval-1",
+        entityType: "approval",
+        payload: { type: "request_board_approval", approvalId: "approval-1" },
+      }),
+    );
+    await emit(
+      harness,
+      "agent.run.failed",
+      makeEvent({
+        eventType: "agent.run.failed",
+        entityId: "agent-1",
+        entityType: "agent",
+        payload: { agentId: "agent-1", error: "boom" },
+      }),
+    );
+
+    const [approval, error] = sendMessageCalls(harness.calls);
+    expect(bodyOf(approval).chat_id).toBe("3003");
+    expect(bodyOf(approval).message_thread_id).toBe(88);
+    expect(bodyOf(error).chat_id).toBe("4004");
+    expect(bodyOf(error).message_thread_id).toBe(99);
+  });
+
+  it("falls back to the default chat when activityChatId is unset", async () => {
+    const harness = makeHarness({
+      companies: [COMPANY],
+      perCompanyConfig: {
+        "co-1": { ...BASE_CONFIG, defaultChatId: "1001", notifyOnIssueCreated: true },
+      },
+    });
+    await plugin.definition.setup(harness.ctx);
+
+    await emit(harness, "issue.created", makeEvent({ payload: { identifier: "ACME-1", title: "New issue" } }));
+
+    const [call] = sendMessageCalls(harness.calls);
+    const body = bodyOf(call);
+    expect(body.chat_id).toBe("1001");
+    expect(body.message_thread_id).toBeUndefined();
   });
 });
 
