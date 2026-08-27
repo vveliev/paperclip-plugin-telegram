@@ -1,7 +1,7 @@
 import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction, type ReplyKeyboardMarkup } from "./telegram-api.js";
 import { METRIC_NAMES, DEFAULT_CONFIG } from "./constants.js";
-import { fetchAttention, sendAttentionList, describeDecisionsError } from "./decisions.js";
+import { fetchAttention, sendAttentionList, describeDecisionsError, DEFAULT_DISPLAY_LIMIT, DECISIONS_PAGE_SIZE } from "./decisions.js";
 import { countAgents } from "./agent-status.js";
 import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
@@ -103,7 +103,7 @@ export const HELP_GROUPS: HelpGroup[] = [
   {
     title: "Approvals",
     entries: [
-      { usage: "/decisions", description: "List decisions waiting on your input" },
+      { usage: "/decisions [n|more]", description: "List decisions waiting on your input, optionally more than the default 5" },
       { usage: "/approve <id>", description: "Approve a pending request by its ID" },
     ],
   },
@@ -154,7 +154,7 @@ export async function handleCommand(
       await handleCreate(ctx, token, chatId, args, messageThreadId, publicUrl || baseUrl, companyId);
       break;
     case "decisions":
-      await handleDecisions(ctx, token, chatId, messageThreadId, baseUrl, publicUrl, companyId, boardApiToken);
+      await handleDecisions(ctx, token, chatId, args, messageThreadId, baseUrl, publicUrl, companyId, boardApiToken);
       break;
     case "status":
       await handleStatus(ctx, token, chatId, messageThreadId, publicUrl, companyId);
@@ -206,6 +206,22 @@ function isExternalUrl(url?: string): boolean {
 }
 
 /**
+ * Parse the optional /decisions argument into a display limit: a bare number
+ * ("/decisions 20") sets it directly, "more" is shorthand for one page past
+ * the default, and anything else (including no argument) falls back to
+ * DEFAULT_DISPLAY_LIMIT. Never throws — an unparseable argument just behaves
+ * like no argument, since a wrong /decisions arg is a discovery aid, not a
+ * usage error worth its own message.
+ */
+export function parseDecisionsLimit(args: string): number {
+  const trimmed = args.trim().toLowerCase();
+  if (!trimmed) return DEFAULT_DISPLAY_LIMIT;
+  if (trimmed === "more") return DEFAULT_DISPLAY_LIMIT + DECISIONS_PAGE_SIZE;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_DISPLAY_LIMIT;
+}
+
+/**
  * /decisions — what is actually waiting on a human, from the decision queue
  * behind the /<company>/decisions page.
  *
@@ -216,6 +232,7 @@ async function handleDecisions(
   ctx: PluginContext,
   token: string,
   chatId: string,
+  args: string,
   messageThreadId?: number,
   baseUrl: string = "http://localhost:3100",
   publicUrl?: string,
@@ -226,13 +243,15 @@ async function handleDecisions(
 
   try {
     const companyId = resolvedCompanyId ?? (await resolveCompanyId(ctx, chatId));
-    const found = await fetchAttention(ctx, baseUrl, companyId, boardApiToken);
+    const limit = parseDecisionsLimit(args);
+    const found = await fetchAttention(ctx, baseUrl, companyId, boardApiToken, limit);
     await sendAttentionList(ctx, token, chatId, found, {
       messageThreadId,
       publicUrl: isExternalUrl(publicUrl) ? publicUrl : undefined,
       baseUrl,
       companyId,
       boardApiToken,
+      limit,
     });
   } catch (err) {
     // A raw "403 Board access required" names the symptom and hides the cause,
