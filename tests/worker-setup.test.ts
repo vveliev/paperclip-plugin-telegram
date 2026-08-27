@@ -125,6 +125,13 @@ function makeHarness(options: {
   issuesListComments?: (...args: unknown[]) => Promise<unknown>;
   agentsGet?: (...args: unknown[]) => Promise<unknown>;
   agentsList?: (...args: unknown[]) => Promise<unknown>;
+  // BLA-620: simulates a host that enforces per-invocation company scoping
+  // (paperclipai/paperclip#9557 "governed access contracts"). setup() runs
+  // outside any invocation, so companies.list() and the unscoped config.get()
+  // both deny with "company context is required" — only calls scoped to an
+  // explicit companyId succeed.
+  governedHost?: boolean;
+  boardAccessCompanyId?: string;
 } = {}) {
   const companies = options.companies ?? [];
   const events: Record<string, Array<(event: unknown) => Promise<void> | void>> = {};
@@ -134,16 +141,36 @@ function makeHarness(options: {
   const tools: Record<string, { def: unknown; handler: (params: unknown, runCtx: unknown) => Promise<unknown> }> = {};
   const stateStore = new Map<string, unknown>();
 
+  if (options.boardAccessCompanyId) {
+    stateStore.set(
+      stateKeyOf({ scopeKind: "instance", stateKey: "telegram.board-access.v1" }),
+      {
+        companyId: options.boardAccessCompanyId,
+        paperclipBoardApiTokenRef: null,
+        identity: null,
+        updatedAt: null,
+      },
+    );
+  }
+
   const { fetchMock, calls } = makeFetchRouter({ events }, options.fetchOverrides);
 
   const ctx = {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     companies: {
-      list: vi.fn(async () => companies),
+      list: vi.fn(async () => {
+        if (options.governedHost) {
+          throw new Error("the worker referenced a missing, expired, or unknown invocation scope");
+        }
+        return companies;
+      }),
       get: vi.fn(async (id: string) => companies.find((c) => c.id === id) ?? null),
     },
     config: {
       get: vi.fn(async (companyId?: string) => {
+        if (options.governedHost && !companyId) {
+          throw new Error('Plugin "test-plugin" is not allowed to perform "config.get": company context is required');
+        }
         const specific = companyId ? options.perCompanyConfig?.[companyId] : undefined;
         return { ...(specific ?? BASE_CONFIG) };
       }),
@@ -867,6 +894,45 @@ describe("setup() bot command registration", () => {
     });
 
     expect(harness.calls.filter((c) => c.path === "setMyCommands")).toHaveLength(1);
+  });
+});
+
+describe("setup() on a governed host (BLA-620)", () => {
+  // Regression for upstream paperclipai/paperclip-plugin-telegram#77, #63,
+  // #61, #64: on a host that enforces per-invocation company scoping,
+  // ctx.companies.list() and the unscoped ctx.config.get() both deny with
+  // "company context is required" during setup(), because setup() runs
+  // outside any invocation scope. Before the fallback in listCompaniesForStartup
+  // / loadStartupConfig, this crashed setup() outright — the plugin never
+  // finished initializing and every inbound feature was dead. It now retries
+  // scoped to the company id recorded in board-access state, so setup()
+  // completes and a real polling runtime still comes up.
+  it("does not throw and still builds a working polling runtime via the board-access company fallback", async () => {
+    const harness = makeHarness({
+      governedHost: true,
+      boardAccessCompanyId: COMPANY.id,
+      perCompanyConfig: {
+        [COMPANY.id]: { ...BASE_CONFIG, enableCommands: true, enableInbound: true },
+      },
+    });
+
+    await expect(plugin.definition.setup(harness.ctx)).resolves.toBeUndefined();
+
+    expect(harness.ctx.logger.error).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(harness.calls.some((c) => c.path === "getUpdates")).toBe(true);
+    });
+  });
+
+  it("still warns instead of crashing when board-access state has no company id to fall back to", async () => {
+    const harness = makeHarness({ governedHost: true });
+
+    await expect(plugin.definition.setup(harness.ctx)).resolves.toBeUndefined();
+
+    expect(harness.calls.some((c) => c.path === "getUpdates")).toBe(false);
+    expect(harness.ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("No company-scoped Telegram bot token is resolvable"),
+    );
   });
 });
 
