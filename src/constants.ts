@@ -16,6 +16,11 @@ export const DEFAULT_CONFIG = {
   approvalsTopicId: "",
   errorsChatId: "",
   errorsTopicId: "",
+  // Routine, FYI-only notices (issue created/done/assigned, agent run
+  // started/finished) route here instead of the default chat when set, so
+  // they don't bury approvals and errors in the same stream (BLA-618).
+  activityChatId: "",
+  activityTopicId: "",
   digestChatId: "",
   digestTopicId: "",
   paperclipBaseUrl: "http://localhost:3100",

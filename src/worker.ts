@@ -72,6 +72,8 @@ type TelegramConfig = {
   approvalsTopicId: string;
   errorsChatId: string;
   errorsTopicId: string;
+  activityChatId: string;
+  activityTopicId: string;
   digestChatId: string;
   digestTopicId: string;
   paperclipBaseUrl: string;
@@ -411,7 +413,7 @@ export function parseTopicId(value?: string): number | undefined {
 
 export function validateConfiguredTopicIds(config: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  for (const key of ["approvalsTopicId", "errorsTopicId", "digestTopicId"]) {
+  for (const key of ["approvalsTopicId", "errorsTopicId", "activityTopicId", "digestTopicId"]) {
     const value = config[key];
     if (value === undefined || value === null || value === "") continue;
     if (typeof value !== "string" || !parseTopicId(value)) {
@@ -840,6 +842,16 @@ const enrichAgentName = async (ctx: PluginContext, event: PluginEvent) => {
   }
 };
 
+const enrichRunIssue = async (ctx: PluginContext, event: PluginEvent) => {
+  const payload = event.payload as Record<string, unknown>;
+  if (payload.issueId && !payload.issueIdentifier) {
+    try {
+      const issue = await ctx.issues.get(str(payload.issueId), event.companyId);
+      if (issue?.identifier) payload.issueIdentifier = issue.identifier;
+    } catch { /* best effort */ }
+  }
+};
+
 export const plugin = definePlugin({
   async setup(ctx) {
     _pluginCtx = ctx;
@@ -880,7 +892,7 @@ export const plugin = definePlugin({
     ctx.events.on("issue.created", async (event: PluginEvent) => {
       const rt = ensureRuntime();
       if (!rt || !rt.config.notifyOnIssueCreated) return;
-      await notify(ctx, rt, event, formatIssueCreated);
+      await notify(ctx, rt, event, formatIssueCreated, rt.config.activityChatId, rt.config.activityTopicId);
     });
 
     ctx.events.on("issue.updated", async (event: PluginEvent) => {
@@ -912,7 +924,7 @@ export const plugin = definePlugin({
           }
         } catch { /* best effort */ }
       }
-      await notify(ctx, rt, event, formatIssueDone);
+      await notify(ctx, rt, event, formatIssueDone, rt.config.activityChatId, rt.config.activityTopicId);
     });
 
     ctx.events.on("issue.updated", async (event: PluginEvent) => {
@@ -953,7 +965,7 @@ export const plugin = definePlugin({
         } catch { /* best effort */ }
       }
 
-      await notify(ctx, rt, event, formatIssueAssigned);
+      await notify(ctx, rt, event, formatIssueAssigned, rt.config.activityChatId, rt.config.activityTopicId);
     });
 
     ctx.events.on("approval.created", async (event: PluginEvent) => {
@@ -1038,13 +1050,15 @@ export const plugin = definePlugin({
       const rt = ensureRuntime();
       if (!rt || !rt.config.notifyOnAgentRunStarted) return;
       await enrichAgentName(ctx, event);
-      await notify(ctx, rt, event, formatAgentRunStarted);
+      await enrichRunIssue(ctx, event);
+      await notify(ctx, rt, event, formatAgentRunStarted, rt.config.activityChatId, rt.config.activityTopicId);
     });
     ctx.events.on("agent.run.finished", async (event: PluginEvent) => {
       const rt = ensureRuntime();
       if (!rt || !rt.config.notifyOnAgentRunFinished) return;
       await enrichAgentName(ctx, event);
-      await notify(ctx, rt, event, formatAgentRunFinished);
+      await enrichRunIssue(ctx, event);
+      await notify(ctx, rt, event, formatAgentRunFinished, rt.config.activityChatId, rt.config.activityTopicId);
     });
 
     // --- Per-company chat overrides ---

@@ -133,6 +133,13 @@ describe("validateConfiguredTopicIds", () => {
   it("rejects a non-string value", () => {
     expect(validateConfiguredTopicIds({ approvalsTopicId: 42 })).toHaveLength(1);
   });
+
+  it("validates activityTopicId the same way as the other routed topics (BLA-618)", () => {
+    expect(validateConfiguredTopicIds({ activityTopicId: "77" })).toEqual([]);
+    const errors = validateConfiguredTopicIds({ activityTopicId: "general" });
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("activityTopicId");
+  });
 });
 
 describe("resolveDigestThreadId", () => {

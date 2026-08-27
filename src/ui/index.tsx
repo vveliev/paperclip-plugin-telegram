@@ -74,6 +74,8 @@ type TelegramRoutingConfig = {
   notifyOnAgentError: boolean;
   notifyOnAgentRunStarted: boolean;
   notifyOnAgentRunFinished: boolean;
+  activityChatId: string;
+  activityTopicId: string;
   digestChatId: string;
   digestTopicId: string;
   digestMode: "off" | "daily" | "bidaily" | "tridaily";
@@ -140,6 +142,8 @@ const DEFAULT_ROUTING_CONFIG: TelegramRoutingConfig = {
   notifyOnAgentError: true,
   notifyOnAgentRunStarted: false,
   notifyOnAgentRunFinished: false,
+  activityChatId: "",
+  activityTopicId: "",
   digestChatId: "",
   digestTopicId: "",
   digestMode: "off",
@@ -282,6 +286,8 @@ function extractRoutingConfig(config: Record<string, unknown>): TelegramRoutingC
       config.notifyOnAgentRunFinished,
       DEFAULT_ROUTING_CONFIG.notifyOnAgentRunFinished,
     ),
+    activityChatId: asString(config.activityChatId),
+    activityTopicId: asString(config.activityTopicId),
     digestChatId: asString(config.digestChatId),
     digestTopicId: asString(config.digestTopicId),
     digestMode: asDigestMode(config.digestMode),
@@ -1795,7 +1801,7 @@ export function TelegramSettingsPage({ context }: PluginSettingsPageProps): Reac
                     Run started
                   </span>
                   <span style={{ color: "var(--muted-foreground)", fontSize: 12, marginLeft: 22 }}>
-                    Notify on every agent run start. Off by default - high-frequency on busy instances. Routes through the default chat.
+                    Notify on every agent run start. Off by default - high-frequency on busy instances. Routes through the Activity chat below, or the default chat if that is empty.
                   </span>
                 </label>
                 <label style={{ color: "var(--foreground)", display: "grid", gap: 3, fontSize: 13 }}>
@@ -1809,11 +1815,23 @@ export function TelegramSettingsPage({ context }: PluginSettingsPageProps): Reac
                     Run finished
                   </span>
                   <span style={{ color: "var(--muted-foreground)", fontSize: 12, marginLeft: 22 }}>
-                    Notify on every agent run completion. Off by default - high-frequency on busy instances. Routes through the default chat.
+                    Notify on every agent run completion. Off by default - high-frequency on busy instances. Routes through the Activity chat below, or the default chat if that is empty.
                   </span>
                 </label>
               </>
             }
+          />
+
+          <RoutingRow
+            title="Activity"
+            chatId={routingConfig.activityChatId}
+            topicId={routingConfig.activityTopicId}
+            chatPlaceholder="Activity chat ID"
+            topicPlaceholder="Activity topic ID"
+            disabled={routingLoading || routingSaving}
+            onChatIdChange={(value) => updateRoutingField("activityChatId", value)}
+            onTopicIdChange={(value) => updateRoutingField("activityTopicId", value)}
+            chatHelp="Routine, FYI-only notices - issue created/completed/assigned and agent run started/finished - route here instead of the default chat, so they don't bury approvals and errors in the same stream. Leave empty to use the default chat."
           />
 
           <RoutingRow
