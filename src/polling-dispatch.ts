@@ -2,6 +2,7 @@ export type TelegramDispatchConfig = {
   defaultChatId?: unknown;
   approvalsChatId?: unknown;
   errorsChatId?: unknown;
+  activityChatId?: unknown;
   digestChatId?: unknown;
   escalationChatId?: unknown;
   allowedTelegramChatIds?: unknown;
@@ -45,6 +46,7 @@ export function telegramRuntimeChatIds(config: TelegramDispatchConfig): Set<stri
   addStringValue(values, config.defaultChatId);
   addStringValue(values, config.approvalsChatId);
   addStringValue(values, config.errorsChatId);
+  addStringValue(values, config.activityChatId);
   addStringValue(values, config.digestChatId);
   addStringValue(values, config.escalationChatId);
   addStringArray(values, config.allowedTelegramChatIds);
