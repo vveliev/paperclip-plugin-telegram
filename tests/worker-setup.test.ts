@@ -1056,4 +1056,62 @@ describe("setup() long polling", () => {
       vi.useRealTimers();
     }
   });
+
+  // GIF-18 (re-scoped per GIF-37): the originally requested test raced a live
+  // in-flight getUpdates against bootstrapRuntime's generation-bump restart
+  // guard. That machinery never shipped to prerelease and GIF-37 decided not
+  // to reopen it, so there is no in-process restart race to test against.
+  // What *is* real and live: a 409 from Telegram (e.g. a second consumer,
+  // such as a rotated-token process, briefly holding the same long-poll
+  // connection) comes back as `ok:false`, not a thrown error. This pins that
+  // the response is dropped outright — not dispatched, offset not advanced —
+  // and that the loop backs off and resumes rather than hot-spinning or
+  // exiting.
+  it("drops a 409/ok:false getUpdates response without dispatching or advancing the offset", async () => {
+    vi.useFakeTimers();
+    try {
+      let getUpdatesCalls = 0;
+      const harness = makeHarness({
+        companies: [COMPANY],
+        perCompanyConfig: { "co-1": { ...BASE_CONFIG, enableInbound: true, defaultChatId: "1001" } },
+        fetchOverrides: {
+          getUpdates: async () => {
+            getUpdatesCalls++;
+            if (getUpdatesCalls === 1) {
+              return jsonResponse({
+                ok: false,
+                error_code: 409,
+                description: "Conflict: terminated by other getUpdates request",
+              });
+            }
+            for (const fn of harness.events["plugin.stopping"] ?? []) await fn(undefined);
+            return jsonResponse({ ok: true, result: [] });
+          },
+        },
+      });
+
+      await plugin.definition.setup(harness.ctx);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(getUpdatesCalls).toBe(1);
+      expect(harness.ctx.logger.warn).toHaveBeenCalledWith(
+        "Telegram getUpdates: unexpected response",
+        expect.objectContaining({ ok: false, error_code: 409 }),
+      );
+      // Nothing from the conflicting response was dispatched...
+      expect(harness.calls.some((c) => c.path === "sendMessage" || c.path === "answerCallbackQuery")).toBe(false);
+      // ...and no offset was persisted from it — the store stays untouched.
+      expect(
+        harness.stateStore.get(stateKeyOf({ scopeKind: "instance", stateKey: "telegram-last-update-id" })),
+      ).toBeUndefined();
+
+      // The loop must not have exited or hot-spun after the 409 — it backs
+      // off 5s, mirroring the thrown-error path, and resumes on the next tick.
+      expect(getUpdatesCalls).toBe(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(getUpdatesCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
