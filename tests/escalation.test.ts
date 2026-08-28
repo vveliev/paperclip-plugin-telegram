@@ -282,7 +282,7 @@ describe("EscalationManager.handleCallback - callback data parsing", () => {
     await manager.handleCallback(ctx, "token", "reply", "esc-001", "user-1", "cbq-1", "esc-chat-1", 42);
 
     expect(editedMessages.length).toBe(1);
-    expect(editedMessages[0].text).toContain("Awaiting your reply");
+    expect(editedMessages[0].text).toContain("Awaiting Your Reply");
   });
 
   it("handles esc_dismiss action", async () => {

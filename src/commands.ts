@@ -195,7 +195,9 @@ export async function handleCommand(
       await handleAcpCommand(ctx, token, chatId, args, messageThreadId, companyId, maxAgentsPerThread);
       break;
     default:
+      // plain: interpolates the raw command name the user typed
       await sendMessage(ctx, token, chatId, `Unknown command: /${command}. Try /help`, {
+        parseMode: undefined,
         messageThreadId,
       });
   }
@@ -257,7 +259,8 @@ async function handleDecisions(
     // A raw "403 Board access required" names the symptom and hides the cause,
     // so translate it into what actually went wrong before sending it on.
     ctx.logger.error("Failed to load decisions", { error: String(err) });
-    await sendMessage(ctx, token, chatId, describeDecisionsError(err), { messageThreadId });
+    // plain: describeDecisionsError's text is not escaped for MarkdownV2
+    await sendMessage(ctx, token, chatId, describeDecisionsError(err), { parseMode: undefined, messageThreadId });
   }
 }
 
@@ -334,7 +337,8 @@ async function handleIssues(
 
     if (filtered.length === 0) {
       const filter = projectFilter ? ` for project "${projectFilter}"` : "";
-      await sendMessage(ctx, token, chatId, `No issues found${filter}.`, { messageThreadId });
+      // plain: interpolates the raw projectFilter argument
+      await sendMessage(ctx, token, chatId, `No issues found${filter}.`, { parseMode: undefined, messageThreadId });
       return;
     }
 
@@ -356,12 +360,13 @@ async function handleIssues(
     });
   } catch {
     const filter = projectFilter ? ` for project "${projectFilter}"` : "";
+    // plain: interpolates the raw projectFilter argument
     await sendMessage(
       ctx,
       token,
       chatId,
       `Could not fetch issues${filter}. Make sure this chat is linked with /connect.`,
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
   }
 }
@@ -381,7 +386,8 @@ async function handleAgents(
     const agents = await ctx.agents.list({ companyId });
 
     if (agents.length === 0) {
-      await sendMessage(ctx, token, chatId, "No agents found.", { messageThreadId });
+      // plain: static status text, no formatting need
+      await sendMessage(ctx, token, chatId, "No agents found.", { parseMode: undefined, messageThreadId });
       return;
     }
 
@@ -414,12 +420,13 @@ async function handleAgents(
       messageThreadId,
     });
   } catch {
+    // plain: static status text, no formatting need
     await sendMessage(
       ctx,
       token,
       chatId,
       "Could not fetch agents. Make sure this chat is linked with /connect.",
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
   }
 }
@@ -434,7 +441,9 @@ async function handleApprove(
   boardApiToken?: string,
 ): Promise<void> {
   if (!approvalId.trim()) {
+    // plain: static usage text, no formatting need
     await sendMessage(ctx, token, chatId, "Usage: /approve <approval-id>", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -462,12 +471,13 @@ async function handleApprove(
       { parseMode: "MarkdownV2", messageThreadId },
     );
   } catch (err) {
+    // plain: interpolates a raw upstream error message
     await sendMessage(
       ctx,
       token,
       chatId,
       `Failed to approve ${approvalId}: ${err instanceof Error ? err.message : String(err)}`,
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
   }
 }
@@ -584,33 +594,39 @@ async function handleKeyboard(
   chatType: string | undefined,
 ): Promise<void> {
   if (chatType !== "private") {
+    // plain: static status text, no formatting need
     await sendMessage(
       ctx,
       token,
       chatId,
       "/keyboard is only available in a direct message with the bot.",
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
     return;
   }
 
   switch (args.trim().toLowerCase()) {
     case "on":
+      // plain: static status text, no formatting need
       await sendMessage(ctx, token, chatId, "Persistent keyboard enabled.", {
+        parseMode: undefined,
         messageThreadId,
         keyboard: PERSISTENT_KEYBOARD,
       });
       await ctx.metrics.write(METRIC_NAMES.keyboardEnabled, 1);
       break;
     case "off":
+      // plain: static status text, no formatting need
       await sendMessage(ctx, token, chatId, "Persistent keyboard disabled.", {
+        parseMode: undefined,
         messageThreadId,
         keyboard: { removeKeyboard: true },
       });
       await ctx.metrics.write(METRIC_NAMES.keyboardDisabled, 1);
       break;
     default:
-      await sendMessage(ctx, token, chatId, "Usage: /keyboard on|off", { messageThreadId });
+      // plain: static usage text, no formatting need
+      await sendMessage(ctx, token, chatId, "Usage: /keyboard on|off", { parseMode: undefined, messageThreadId });
   }
 }
 
@@ -625,9 +641,11 @@ async function handleConnect(
     try {
       const companies = await ctx.companies.list();
       const names = companies.map((c) => c.name || c.id).join(", ");
-      await sendMessage(ctx, token, chatId, `Usage: /connect <company-name>\nAvailable: ${names || "none"}`, { messageThreadId });
+      // plain: interpolates raw company names from ctx.companies.list()
+      await sendMessage(ctx, token, chatId, `Usage: /connect <company-name>\nAvailable: ${names || "none"}`, { parseMode: undefined, messageThreadId });
     } catch {
-      await sendMessage(ctx, token, chatId, "Usage: /connect <company-name>", { messageThreadId });
+      // plain: static usage text, no formatting need
+      await sendMessage(ctx, token, chatId, "Usage: /connect <company-name>", { parseMode: undefined, messageThreadId });
     }
     return;
   }
@@ -643,12 +661,13 @@ async function handleConnect(
 
     if (!match) {
       const names = companies.map((c) => c.name || c.id).join(", ");
+      // plain: interpolates raw user input and company names
       await sendMessage(
         ctx,
         token,
         chatId,
         `Company "${input}" not found. Available: ${names || "none"}`,
-        { messageThreadId },
+        { parseMode: undefined, messageThreadId },
       );
       return;
     }
@@ -684,12 +703,13 @@ async function handleConnect(
 
     ctx.logger.info("Chat linked to company", { chatId, companyId: match.id, companyName: match.name });
   } catch (err) {
+    // plain: interpolates a raw upstream error message
     await sendMessage(
       ctx,
       token,
       chatId,
       `Failed to connect: ${err instanceof Error ? err.message : String(err)}`,
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
   }
 }
@@ -705,7 +725,8 @@ async function handleCreate(
 ): Promise<void> {
   const title = titleArg.trim();
   if (!title) {
-    await sendMessage(ctx, token, chatId, "Usage: /create <task title>", { messageThreadId });
+    // plain: static usage text, no formatting need
+    await sendMessage(ctx, token, chatId, "Usage: /create <task title>", { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -748,19 +769,25 @@ async function handleCreate(
       ctx,
       token,
       chatId,
-      `${escapeMarkdownV2("✅")} *Task created*: ${idText}${assigneeText}\n${escapeMarkdownV2(title)}`,
+      `${escapeMarkdownV2("✅")} *Task Created*: ${idText}${assigneeText}\n${escapeMarkdownV2(title)}`,
       { parseMode: "MarkdownV2", messageThreadId },
     );
   } catch (err) {
+    // plain: interpolates a raw upstream error message
     await sendMessage(
       ctx,
       token,
       chatId,
       `Failed to create task: ${err instanceof Error ? err.message : String(err)}`,
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
   }
 }
+
+// Escaped once here instead of hand-escaped per call site (three of them
+// below) so the one escaping path stays the source of truth — a hand-escaped
+// literal previously missed `>`, a MarkdownV2-reserved character.
+const CONNECT_TOPIC_USAGE = escapeMarkdownV2("Usage: /connect_topic <project-name> [topic-id]");
 
 export async function handleConnectTopic(
   ctx: PluginContext,
@@ -771,7 +798,7 @@ export async function handleConnectTopic(
 ): Promise<void> {
   const trimmedArgs = args.trim();
   if (!trimmedArgs) {
-    await sendMessage(ctx, token, chatId, "Usage: /connect\\_topic <project\\-name> \\[topic\\-id\\]", {
+    await sendMessage(ctx, token, chatId, CONNECT_TOPIC_USAGE, {
       parseMode: "MarkdownV2",
       messageThreadId,
     });
@@ -780,7 +807,7 @@ export async function handleConnectTopic(
 
   const parts = trimmedArgs.split(/\s+/);
   if (parts.length < 2 && !messageThreadId) {
-    await sendMessage(ctx, token, chatId, "Usage: /connect\\_topic <project\\-name> \\[topic\\-id\\]", {
+    await sendMessage(ctx, token, chatId, CONNECT_TOPIC_USAGE, {
       parseMode: "MarkdownV2",
       messageThreadId,
     });
@@ -795,7 +822,7 @@ export async function handleConnectTopic(
     projectNameInput = parts.join(" ");
   } else {
     if (!messageThreadId) {
-      await sendMessage(ctx, token, chatId, "Usage: /connect\\_topic <project\\-name> \\[topic\\-id\\]", {
+      await sendMessage(ctx, token, chatId, CONNECT_TOPIC_USAGE, {
         parseMode: "MarkdownV2",
         messageThreadId,
       });
@@ -809,7 +836,8 @@ export async function handleConnectTopic(
   try {
     companyId = await resolveCompanyId(ctx, chatId);
   } catch {
-    await sendMessage(ctx, token, chatId, "This chat is not linked to a Paperclip company. Use /connect first.", { messageThreadId });
+    // plain: static status text, no formatting need
+    await sendMessage(ctx, token, chatId, "This chat is not linked to a Paperclip company. Use /connect first.", { parseMode: undefined, messageThreadId });
     return;
   }
   const project = await resolveProjectByName(ctx, companyId, projectNameInput);
@@ -872,12 +900,13 @@ async function handleTopicsList(
   const entries = Object.entries(topicMap);
 
   if (entries.length === 0) {
-    await sendMessage(ctx, token, chatId, "No topic mappings found for this chat.", { messageThreadId });
+    // plain: static status text, no formatting need
+    await sendMessage(ctx, token, chatId, "No topic mappings found for this chat.", { parseMode: undefined, messageThreadId });
     return;
   }
 
   const lines = [
-    escapeMarkdownV2("🧭") + " *Topic mappings*",
+    escapeMarkdownV2("🧭") + " *Topic Mappings*",
     "",
     ...entries.map(([key, value]) => {
       const mapping = normalizeTopicMapping(key, value);
@@ -900,7 +929,7 @@ async function handleTopicsRemove(
 ): Promise<void> {
   const input = projectName.trim();
   if (!input) {
-    await sendMessage(ctx, token, chatId, "Usage: /topics remove <project\\-name>", {
+    await sendMessage(ctx, token, chatId, escapeMarkdownV2("Usage: /topics remove <project-name>"), {
       parseMode: "MarkdownV2",
       messageThreadId,
     });
@@ -910,7 +939,8 @@ async function handleTopicsRemove(
   const topicMap = await getTopicMap(ctx, chatId);
   const key = findTopicMapKey(topicMap, input);
   if (!key) {
-    await sendMessage(ctx, token, chatId, `No topic mapping found for "${input}".`, { messageThreadId });
+    // plain: interpolates raw user input
+    await sendMessage(ctx, token, chatId, `No topic mapping found for "${input}".`, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -934,7 +964,8 @@ async function handleTopicsClear(
   messageThreadId?: number,
 ): Promise<void> {
   await setTopicMap(ctx, chatId, {});
-  await sendMessage(ctx, token, chatId, "Cleared all topic mappings for this chat.", { messageThreadId });
+  // plain: static status text, no formatting need
+  await sendMessage(ctx, token, chatId, "Cleared all topic mappings for this chat.", { parseMode: undefined, messageThreadId });
 }
 
 async function sendTopicsUsage(
@@ -950,9 +981,9 @@ async function sendTopicsUsage(
     [
       escapeMarkdownV2("🧭") + " *Topic Commands*",
       "",
-      `/topics list \\- ${escapeMarkdownV2("Show mappings for this chat")}`,
-      `/topics remove <project\\-name> \\- ${escapeMarkdownV2("Remove one mapping")}`,
-      `/topics clear \\- ${escapeMarkdownV2("Remove all mappings for this chat")}`,
+      `${escapeMarkdownV2("/topics list -")} ${escapeMarkdownV2("Show mappings for this chat")}`,
+      `${escapeMarkdownV2("/topics remove <project-name> -")} ${escapeMarkdownV2("Remove one mapping")}`,
+      `${escapeMarkdownV2("/topics clear -")} ${escapeMarkdownV2("Remove all mappings for this chat")}`,
     ].join("\n"),
     { parseMode: "MarkdownV2", messageThreadId },
   );
@@ -983,15 +1014,17 @@ async function sendProjectNotFoundMessage(
   try {
     const projects = await ctx.projects.list({ companyId, limit: 100 });
     const names = projects.map((project) => project.name || project.id).filter(Boolean).join(", ");
+    // plain: interpolates raw user input and project names
     await sendMessage(
       ctx,
       token,
       chatId,
       `Project "${projectName.trim()}" not found. Available: ${names || "none"}`,
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
   } catch {
-    await sendMessage(ctx, token, chatId, `Project "${projectName.trim()}" not found.`, { messageThreadId });
+    // plain: interpolates raw user input
+    await sendMessage(ctx, token, chatId, `Project "${projectName.trim()}" not found.`, { parseMode: undefined, messageThreadId });
   }
 }
 
