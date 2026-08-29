@@ -260,7 +260,7 @@ const MUTATIONS = [
     find: `  if (!resolvedCompanyId) {
     // Handled: the message was addressed to a live session, so staying silent
     // here would look like the agent simply ignored it.
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { messageThreadId: threadId });
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId: threadId });
     return true;
   }`,
     replace: "",

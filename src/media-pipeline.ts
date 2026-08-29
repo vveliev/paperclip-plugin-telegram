@@ -112,12 +112,13 @@ export async function handleMediaMessage(
       ctx.logger.info("Media routed to brief agent", { runId, briefAgentId: config.briefAgentId });
     } catch (err) {
       ctx.logger.error("Failed to invoke brief agent", { error: String(err) });
+      // plain: interpolates a raw upstream error message
       await sendMessage(
         ctx,
         token,
         chatId,
         `Failed to route media to brief agent: ${String(err)}`,
-        { messageThreadId: threadId },
+        { parseMode: undefined, messageThreadId: threadId },
       );
     }
   } else if (hasActiveSession && threadId) {

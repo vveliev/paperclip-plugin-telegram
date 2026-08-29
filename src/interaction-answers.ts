@@ -392,15 +392,17 @@ async function finishAskUserQuestions(
       boardApiToken,
     );
     await ctx.metrics.write(METRIC_NAMES.interactionAnswered, 1);
+    // plain: interpolates the interaction's own status; not escaped for MarkdownV2
     const text = result.status === "answered"
       ? "✅ Answer recorded."
       : `Recorded, but the interaction is now "${result.status}". Check /decisions or the web UI.`;
     if (messageId) await editMessage(ctx, token, parked.chatId, messageId, text);
-    else await sendMessage(ctx, token, parked.chatId, text, { messageThreadId: parked.messageThreadId });
+    else await sendMessage(ctx, token, parked.chatId, text, { parseMode: undefined, messageThreadId: parked.messageThreadId });
   } catch (err) {
+    // plain: interpolates a raw upstream error message
     const text = `Could not submit your answer: ${err instanceof Error ? err.message : String(err)}`;
     if (messageId) await editMessage(ctx, token, parked.chatId, messageId, text);
-    else await sendMessage(ctx, token, parked.chatId, text, { messageThreadId: parked.messageThreadId });
+    else await sendMessage(ctx, token, parked.chatId, text, { parseMode: undefined, messageThreadId: parked.messageThreadId });
   }
 }
 
@@ -612,17 +614,20 @@ export async function finalizeReplyRejection(
     const fresh = await fetchInteraction(ctx, baseUrl, mapping.issueId, mapping.entityId, boardApiToken);
     if (!fresh || fresh.status !== "pending") {
       const status = fresh?.status ?? "gone";
-      await sendMessage(ctx, token, chatId, `This is no longer pending (${status}).`);
+      // plain: interpolates the interaction's own status
+      await sendMessage(ctx, token, chatId, `This is no longer pending (${status}).`, { parseMode: undefined });
       return;
     }
     const result = await postInteractionAction(ctx, baseUrl, mapping.issueId, mapping.entityId, "reject", { reason: reasonText }, boardApiToken);
     await ctx.metrics.write(METRIC_NAMES.interactionAnswered, 1);
+    // plain: interpolates the interaction's own status; not escaped for MarkdownV2
     const text = result.status === "rejected"
       ? "❌ Rejected with your reason."
       : `Recorded, but the interaction is now "${result.status}". Check /decisions or the web UI.`;
-    await sendMessage(ctx, token, chatId, text);
+    await sendMessage(ctx, token, chatId, text, { parseMode: undefined });
   } catch (err) {
-    await sendMessage(ctx, token, chatId, `Could not reject this: ${err instanceof Error ? err.message : String(err)}`);
+    // plain: interpolates a raw upstream error message
+    await sendMessage(ctx, token, chatId, `Could not reject this: ${err instanceof Error ? err.message : String(err)}`, { parseMode: undefined });
   }
 }
 
