@@ -295,7 +295,7 @@ describe("handleCommand", () => {
       { status: "todo", assigneeAgentId: "ceo-1" },
       expect.any(String),
     );
-    expect(sentMessages[0].text).toContain("Task created");
+    expect(sentMessages[0].text).toContain("Task Created");
     expect(sentMessages[0].text).toContain("MC\\-99");
     expect(sentMessages[0].text).toContain("Zhu Li");
   });
@@ -354,7 +354,7 @@ describe("handleCommand", () => {
       { status: "todo" },
       expect.any(String),
     );
-    expect(sentMessages[0].text).toContain("Task created");
+    expect(sentMessages[0].text).toContain("Task Created");
   });
 });
 
@@ -429,7 +429,7 @@ describe("topics command", () => {
     };
     const ctx = mockCtx();
     await handleCommand(ctx, "token", "123", "topics", "list");
-    expect(sentMessages[0].text).toContain("Topic mappings");
+    expect(sentMessages[0].text).toContain("Topic Mappings");
     expect(sentMessages[0].text).toContain("Backend");
     expect(sentMessages[0].text).toContain("42");
     expect(sentMessages[0].text).toContain("Legacy");

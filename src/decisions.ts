@@ -304,7 +304,9 @@ export async function sendAttentionList(
   const { items, totalCount } = found;
 
   if (items.length === 0) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "Nothing is waiting on your input.", {
+      parseMode: undefined,
       messageThreadId: opts.messageThreadId,
     });
     return;
@@ -348,7 +350,9 @@ export async function sendAttentionList(
     // can no longer pull in more items, so there is nothing "Show more" could
     // do — drop the button rather than offer a tap that changes nothing.
     const canPageFurther = shownThrough < MAX_ATTENTION_LIMIT;
+    // plain: static text with only a plain integer interpolated
     await sendMessage(ctx, token, chatId, `…and ${remaining} more waiting.`, {
+      parseMode: undefined,
       messageThreadId: opts.messageThreadId,
       inlineKeyboard: canPageFurther
         ? [[{ text: `Show more (+${Math.min(DECISIONS_PAGE_SIZE, remaining)})`, callback_data: `${DECISIONS_MORE_PREFIX}${shownThrough}` }]]
@@ -403,7 +407,8 @@ export async function resolveDecisionsMoreCallback(
     });
   } catch (err) {
     ctx.logger.error("Failed to load more decisions", { error: String(err) });
-    await sendMessage(ctx, token, chatId, describeDecisionsError(err), { messageThreadId: opts.messageThreadId });
+    // plain: describeDecisionsError's text is not escaped for MarkdownV2
+    await sendMessage(ctx, token, chatId, describeDecisionsError(err), { parseMode: undefined, messageThreadId: opts.messageThreadId });
   }
 }
 

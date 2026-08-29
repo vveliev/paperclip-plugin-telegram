@@ -139,7 +139,8 @@ export async function handleCommandsCommand(
   const subcommand = parts[0]?.toLowerCase() ?? "";
 
   if (!companyId && ["list", "import", "delete", "run"].includes(subcommand)) {
-    await sendMessage(ctx, token, chatId, "This chat is not linked to a Paperclip company. Use /connect first.", { messageThreadId });
+    // plain: static status text, no formatting need
+    await sendMessage(ctx, token, chatId, "This chat is not linked to a Paperclip company. Use /connect first.", { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -205,7 +206,8 @@ async function listCommands(
   const commands = await getCommandRegistry(ctx, resolvedCompanyId);
 
   if (commands.length === 0) {
-    await sendMessage(ctx, token, chatId, "No custom commands registered. Use /commands import to add one.", { messageThreadId });
+    // plain: static status text, no formatting need
+    await sendMessage(ctx, token, chatId, "No custom commands registered. Use /commands import to add one.", { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -234,7 +236,8 @@ async function importCommand(
   companyId?: string,
 ): Promise<void> {
   if (!jsonStr.trim()) {
-    await sendMessage(ctx, token, chatId, "Usage: /commands import <json-definition>", { messageThreadId });
+    // plain: static usage text, no formatting need
+    await sendMessage(ctx, token, chatId, "Usage: /commands import <json-definition>", { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -242,19 +245,22 @@ async function importCommand(
   try {
     parsed = JSON.parse(jsonStr);
   } catch {
-    await sendMessage(ctx, token, chatId, "Invalid JSON. Please provide a valid command definition.", { messageThreadId });
+    // plain: static status text, no formatting need
+    await sendMessage(ctx, token, chatId, "Invalid JSON. Please provide a valid command definition.", { parseMode: undefined, messageThreadId });
     return;
   }
 
   const validation = validateCommandDefinition(parsed);
   if (!validation.ok) {
-    await sendMessage(ctx, token, chatId, validation.error, { messageThreadId });
+    // plain: validation.error is not escaped for MarkdownV2
+    await sendMessage(ctx, token, chatId, validation.error, { parseMode: undefined, messageThreadId });
     return;
   }
   const definition = validation.definition;
 
   if (BUILTIN_COMMANDS.has(definition.name)) {
-    await sendMessage(ctx, token, chatId, `Cannot override built-in command: /${definition.name}`, { messageThreadId });
+    // plain: interpolates the user-supplied command name from the definition
+    await sendMessage(ctx, token, chatId, `Cannot override built-in command: /${definition.name}`, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -297,7 +303,8 @@ async function deleteCommand(
   companyId?: string,
 ): Promise<void> {
   if (!name.trim()) {
-    await sendMessage(ctx, token, chatId, "Usage: /commands delete <name>", { messageThreadId });
+    // plain: static usage text, no formatting need
+    await sendMessage(ctx, token, chatId, "Usage: /commands delete <name>", { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -306,7 +313,8 @@ async function deleteCommand(
   const filtered = commands.filter((c) => c.name !== name);
 
   if (filtered.length === commands.length) {
-    await sendMessage(ctx, token, chatId, `Command /${name} not found.`, { messageThreadId });
+    // plain: interpolates the raw user-supplied command name
+    await sendMessage(ctx, token, chatId, `Command /${name} not found.`, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -335,7 +343,8 @@ async function runCommand(
   const cmd = commands.find((c) => c.name === name);
 
   if (!cmd) {
-    await sendMessage(ctx, token, chatId, `Command /${name} not found.`, { messageThreadId });
+    // plain: interpolates the raw user-supplied command name
+    await sendMessage(ctx, token, chatId, `Command /${name} not found.`, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -397,12 +406,13 @@ async function executeWorkflow(
       results.push({ stepId: step.id, result: result ?? "" });
     } catch (err) {
       ctx.logger.error("Workflow step failed", { command: cmd.name, stepId: step.id, error: String(err) });
+      // plain: interpolates the step's own name and a raw error message
       await sendMessage(
         ctx,
         token,
         chatId,
         `Step "${step.name ?? step.id}" failed: ${String(err)}`,
-        { messageThreadId },
+        { parseMode: undefined, messageThreadId },
       );
       return; // Stop execution on failure
     }
@@ -471,8 +481,10 @@ async function executeStep(
     }
 
     case "send_message": {
+      // plain: an admin-authored template with user-argument interpolation,
+      // not this plugin's own copy — not escaped for MarkdownV2.
       const text = interpolate(step.text);
-      await sendMessage(ctx, token, chatId, text, { messageThreadId });
+      await sendMessage(ctx, token, chatId, text, { parseMode: undefined, messageThreadId });
       return "sent";
     }
 
@@ -498,7 +510,10 @@ async function executeStep(
       // park in the same millisecond, and a collision would resume the wrong
       // continuation.
       const approvalId = `${Date.now()}_${step.id}`;
+      // plain: an admin-authored template with user-argument interpolation,
+      // not this plugin's own copy — not escaped for MarkdownV2.
       await sendMessage(ctx, token, chatId, prompt, {
+        parseMode: undefined,
         messageThreadId,
         inlineKeyboard: [
           [
@@ -609,12 +624,13 @@ export async function resolveWorkflowApprovalCallback(
   const cmd = commands.find((c) => c.name === parked.commandName);
   if (!cmd) {
     // The command was edited or deleted while the approval sat pending.
+    // plain: interpolates the stored command name
     await sendMessage(
       ctx,
       token,
       parked.chatId,
       `Approved, but /${parked.commandName} no longer exists — nothing to continue.`,
-      { messageThreadId: parked.messageThreadId },
+      { parseMode: undefined, messageThreadId: parked.messageThreadId },
     );
     return;
   }

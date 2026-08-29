@@ -4,6 +4,48 @@ import type { SendMessageOptions } from "./telegram-api.js";
 import { str } from "./coerce.js";
 import { AGENT_ERROR_TRUNCATE_LENGTH, TRUNCATE_SHORT, TRUNCATE_MEDIUM } from "./constants.js";
 
+// --- Telegram message formatting convention (GIF-42) ---
+//
+// This is the one convention for every `sendMessage` call in this plugin.
+// A call site that deviates from it must say why in a comment; a bare
+// omission is a bug, not a choice.
+//
+// 1. Parse mode is always explicit. Every `sendMessage` call sets
+//    `parseMode` to one of:
+//      - "MarkdownV2" — the default for anything this plugin composes:
+//        bot-authored notifications, status views, usage/help text. Build
+//        these with `esc()`/`bold()`/`code()` below (backed by
+//        `escapeMarkdownV2` in telegram-api.ts) so every literal character
+//        Telegram's MarkdownV2 reserves (`_*[]()~`>#+-=|{}.!\`) is escaped
+//        before it reaches the API. Never hand-escape a literal in a call
+//        site (e.g. `/connect\_topic`) — call `esc()` instead, so the
+//        escaping path stays singular and auditable.
+//      - `undefined`, set explicitly (`parseMode: undefined`) with a
+//        one-line comment — for text that must render byte-for-byte as
+//        written: raw/echoed user input, upstream error strings we don't
+//        control, or literal examples where escaping would just add visual
+//        noise (`Usage: /keyboard on|off`). Plain text can never fail to
+//        parse, which is the point: it's the deliberate low-risk choice,
+//        not a fallback for "didn't get around to escaping this".
+//      - "HTML" — reserved for exactly one path: relaying an agent's own
+//        output (see `markdownToTelegramHtml` in acp-bridge.ts). Agent text
+//        is arbitrary model output, not this plugin's own copy, and
+//        MarkdownV2's escaping rules are hostile enough to arbitrary prose
+//        (one stray `.` or `-` breaks the whole message) that this plugin
+//        instead does a permissive markdown-to-HTML pass and lets HTML's
+//        much smaller escape set (`&<>`) carry it. Do not add a second HTML
+//        call site without updating this note.
+//
+// 2. Headers are Title Case, one leading emoji, wrapped in `bold()`:
+//    `✅ *Issue Completed*`, not `✅ *Issue completed*` or `*issue completed*`.
+//    Minor words (a/an/the/and/or/of/to/in/your) are capitalized too except
+//    when they open the header — there are no multi-word headers in this
+//    plugin's copy where that distinction currently matters.
+//
+// 3. Emoji is one leading glyph on a header line, escaped like any other
+//    text (`esc("✅")`) since some (e.g. `!`-adjacent glyphs) sit next to
+//    MarkdownV2-reserved characters in the same string literal.
+
 type Payload = Record<string, unknown>;
 
 type FormattedMessage = {
