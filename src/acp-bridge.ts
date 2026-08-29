@@ -149,7 +149,7 @@ export async function handleAcpCommand(
   const subcommand = parts[0]?.toLowerCase() ?? "";
 
   if (!companyId && (subcommand === "spawn" || subcommand === "cancel" || subcommand === "close")) {
-    await sendMessage(ctx, token, chatId, "This chat is not linked to a Paperclip company. Use /connect first.", { messageThreadId });
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -300,19 +300,22 @@ async function handleAcpSpawn(
   maxAgentsPerThread = MAX_AGENTS_PER_THREAD,
 ): Promise<void> {
   if (!agentName.trim()) {
+    // plain: static usage text, no formatting need
     await sendMessage(ctx, token, chatId, "Usage: /acp spawn <agent-name>", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
   }
 
   if (!messageThreadId) {
+    // plain: static status text, no formatting need
     await sendMessage(
       ctx,
       token,
       chatId,
       "Agent sessions must be started inside a topic thread.",
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
     return;
   }
@@ -322,12 +325,14 @@ async function handleAcpSpawn(
 
   if (activeSessions.length >= maxAgentsPerThread) {
     const listing = activeSessions.map((s) => `  - ${s.agentDisplayName} (${s.transport})`).join("\n");
+    // plain: agentDisplayName is derived from user-supplied /acp spawn input
+    // and could itself contain MarkdownV2-reserved characters.
     await sendMessage(
       ctx,
       token,
       chatId,
       `Thread already has ${maxAgentsPerThread} active agents (max):\n${listing}`,
-      { messageThreadId },
+      { parseMode: undefined, messageThreadId },
     );
     return;
   }
@@ -338,7 +343,7 @@ async function handleAcpSpawn(
   const displayName = trimmedName.charAt(0).toUpperCase() + trimmedName.slice(1);
   const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
   if (!resolvedCompanyId) {
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { messageThreadId });
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -441,7 +446,9 @@ async function handleAcpStatus(
   messageThreadId?: number,
 ): Promise<void> {
   if (!messageThreadId) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "Run /acp status inside a thread with an active session.", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -451,7 +458,9 @@ async function handleAcpStatus(
   const activeSessions = sessions.filter((s) => s.status === "active");
 
   if (activeSessions.length === 0) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "No agent sessions bound to this thread.", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -488,7 +497,9 @@ async function handleAcpCancel(
   companyId?: string,
 ): Promise<void> {
   if (!messageThreadId) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "Run /acp cancel inside a thread with an active session.", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -498,7 +509,9 @@ async function handleAcpCancel(
   const activeSessions = sessions.filter((s) => s.status === "active");
 
   if (activeSessions.length === 0) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "No agent sessions bound to this thread.", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -511,7 +524,7 @@ async function handleAcpCancel(
 
   const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
   if (!resolvedCompanyId) {
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { messageThreadId });
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -562,7 +575,9 @@ async function handleAcpClose(
   companyId?: string,
 ): Promise<void> {
   if (!messageThreadId) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "Run /acp close inside a thread with an active session.", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -572,7 +587,9 @@ async function handleAcpClose(
   const activeSessions = sessions.filter((s) => s.status === "active");
 
   if (activeSessions.length === 0) {
+    // plain: static status text, no formatting need
     await sendMessage(ctx, token, chatId, "No agent sessions bound to this thread.", {
+      parseMode: undefined,
       messageThreadId,
     });
     return;
@@ -588,12 +605,14 @@ async function handleAcpClose(
     }
     if (!targetSession) {
       const listing = activeSessions.map((s) => `  - ${s.agentDisplayName}`).join("\n");
+      // plain: echoes back user-supplied targetAgentName plus agent display
+      // names, neither of which is escaped for MarkdownV2.
       await sendMessage(
         ctx,
         token,
         chatId,
         `No agent named "${targetAgentName}" found. Active agents:\n${listing}`,
-        { messageThreadId },
+        { parseMode: undefined, messageThreadId },
       );
       return;
     }
@@ -605,7 +624,7 @@ async function handleAcpClose(
 
   const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
   if (!resolvedCompanyId) {
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { messageThreadId });
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
 
@@ -722,7 +741,7 @@ export async function routeMessageToAgent(
   if (!resolvedCompanyId) {
     // Handled: the message was addressed to a live session, so staying silent
     // here would look like the agent simply ignored it.
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { messageThreadId: threadId });
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId: threadId });
     return true;
   }
   const projectId = await resolveMappedProjectIdForTopic(ctx, chatId, resolvedCompanyId, threadId);
@@ -924,6 +943,19 @@ async function flushOutputQueue(
 }
 
 // --- Markdown to Telegram HTML ---
+//
+// This is the one deliberate exception to the MarkdownV2 convention
+// documented in formatters.ts (GIF-42). Everything below relays an agent's
+// own turn output, which is arbitrary model-generated prose, not copy this
+// plugin authored. MarkdownV2 requires escaping 18 punctuation characters
+// (`_*[]()~`>#+-=|{}.!\`) and Telegram rejects the whole message if even one
+// is missed — a real risk against unreviewed model output where those
+// characters show up constantly in ordinary sentences. HTML's escape set is
+// three characters (`&<>`), so a permissive markdown-to-HTML pass here plus
+// `parseMode: "HTML"` on send/edit trades a few unsupported Markdown
+// constructs for a message that reliably sends. Do not extend this path to
+// plugin-authored copy, and do not add another HTML call site elsewhere
+// without updating this note and the one in formatters.ts.
 
 function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -1686,7 +1718,11 @@ async function resolveCompanyIdFromChat(ctx: PluginContext, chatId: string): Pro
   return mapping?.companyId ?? mapping?.companyName ?? null;
 }
 
-/** What every call site says when the chat turns out not to be linked. */
+/**
+ * What every call site says when the chat turns out not to be linked.
+ * Sent plain (see the parse-mode convention in formatters.ts): it's static
+ * copy with no formatting need, and plain text can't fail to parse.
+ */
 const NOT_LINKED_MESSAGE = "This chat is not linked to a Paperclip company. Use /connect first.";
 
 function simpleHash(text: string): string {

@@ -226,7 +226,7 @@ export class EscalationManager {
             token,
             chatId,
             messageId,
-            `${esc("\u26a0\ufe0f")} *Escalation* \\- *Awaiting your reply*\n\n${esc("Reply to this message with your response to the customer.")}`,
+            `${esc("\u26a0\ufe0f")} *Escalation* \\- *Awaiting Your Reply*\n\n${esc("Reply to this message with your response to the customer.")}`,
             { parseMode: "MarkdownV2" },
           );
         }
@@ -248,7 +248,7 @@ export class EscalationManager {
             token,
             chatId,
             messageId,
-            `${esc("\u26a0\ufe0f")} *Escalation* \\- *Override mode*\n\n${esc("Reply to this message with your custom response.")}`,
+            `${esc("\u26a0\ufe0f")} *Escalation* \\- *Override Mode*\n\n${esc("Reply to this message with your custom response.")}`,
             { parseMode: "MarkdownV2" },
           );
         }
