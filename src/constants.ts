@@ -77,6 +77,14 @@ export const AGENT_ERROR_TRUNCATE_LENGTH = 500;
 export const MAX_CONVERSATION_TURNS = 50;
 export const DEFAULT_CONVERSATION_TURNS = 10;
 
+// Telegram's actual, documented hard limit on a sendMessage `text` body
+// (https://core.telegram.org/bots/api#sendmessage). Every ad hoc budget in
+// this codebase (3500 in commands.ts, 4000 in acp-bridge.ts, 500 in
+// media-pipeline.ts, ...) exists because nothing owned this constant — see
+// GIF-155. `src/reply.ts` is the one place that is allowed to compare a
+// rendered message against it.
+export const TELEGRAM_MESSAGE_MAX_LENGTH = 4096;
+
 export const METRIC_NAMES = {
   sent: "telegram_notifications_sent",
   failed: "telegram_notification_failures",
