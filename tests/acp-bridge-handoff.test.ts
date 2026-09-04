@@ -59,6 +59,11 @@ function pendingHandoff(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/** Seeds the raw row parked-interactions.ts's `park()` would have written. */
+function seedParkedHandoff(overrides: Partial<Record<string, unknown>> = {}) {
+  stateStore["ho_h1"] = { payload: pendingHandoff(overrides), createdAt: Date.now(), expiresAt: Date.now() + 60_000 };
+}
+
 beforeEach(() => {
   sentMessages = [];
   stateStore = {};
@@ -74,7 +79,7 @@ describe("handleHandoffApproval", () => {
   });
 
   it("routes to the existing target session when one is already active, without auto-spawning", async () => {
-    stateStore["handoff_h1"] = pendingHandoff();
+    seedParkedHandoff();
     stateStore["sessions_chat-1_42"] = [
       { sessionId: "s1", agentId: "a1", agentName: "builder", agentDisplayName: "Builder", transport: "native", spawnedAt: "2026-01-01T00:00:00Z", status: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
       { sessionId: "s2", agentId: "a2", agentName: "tester", agentDisplayName: "Tester", transport: "native", spawnedAt: "2026-01-01T00:00:00Z", status: "active", lastActivityAt: "2026-01-01T00:00:00Z" },
@@ -87,11 +92,11 @@ describe("handleHandoffApproval", () => {
     expect(sentMessages.some((m) => m.text.includes("Auto") && m.text.includes("spawned"))).toBe(false);
     expect(ctx.issues.create).toHaveBeenCalledWith(expect.objectContaining({ assigneeAgentId: "a2" }));
     // Pending handoff record must be cleared so a duplicate button press is a no-op
-    expect(stateStore).not.toHaveProperty("handoff_h1");
+    expect(stateStore["ho_h1"]).toBeUndefined();
   });
 
   it("auto-spawns the target agent by resolved UUID (not by name) when no session exists yet", async () => {
-    stateStore["handoff_h1"] = pendingHandoff();
+    seedParkedHandoff();
     const ctx = mockCtx(async () => [{ id: "uuid-tester", name: "tester", urlKey: "tester" }]);
 
     await handleHandoffApproval(ctx, "token", "h1", "alice", "cb-1", "chat-1", 99);
@@ -104,7 +109,7 @@ describe("handleHandoffApproval", () => {
   });
 
   it("falls back to ACP transport when the target agent cannot be resolved by name", async () => {
-    stateStore["handoff_h1"] = pendingHandoff();
+    seedParkedHandoff();
     const ctx = mockCtx(async () => []);
 
     await handleHandoffApproval(ctx, "token", "h1", "alice", "cb-1", "chat-1", 99);
@@ -123,12 +128,12 @@ describe("handleHandoffRejection", () => {
   });
 
   it("notifies the chat and clears the pending handoff so it cannot be approved after rejection", async () => {
-    stateStore["handoff_h1"] = pendingHandoff();
+    seedParkedHandoff();
     const ctx = mockCtx();
 
     await handleHandoffRejection(ctx, "token", "h1", "alice", "cb-1", "chat-1", 99);
 
     expect(sentMessages[0].text).toContain("rejected");
-    expect(stateStore).not.toHaveProperty("handoff_h1");
+    expect(stateStore["ho_h1"]).toBeUndefined();
   });
 });

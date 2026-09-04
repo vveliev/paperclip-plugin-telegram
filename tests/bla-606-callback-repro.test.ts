@@ -35,6 +35,9 @@ function mockCtx(): PluginContext {
       set: vi.fn(async (key: { stateKey: string }, value: unknown) => {
         stateStore[key.stateKey] = value;
       }),
+      delete: vi.fn(async (key: { stateKey: string }) => {
+        delete stateStore[key.stateKey];
+      }),
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     config: { get: vi.fn().mockResolvedValue({}) },
@@ -105,15 +108,19 @@ describe("BLA-606 repro: callback_query for a parked wait_approval, via handleUp
     const ctx = mockCtx();
     const approvalId = "1700000000000_s1";
 
-    // Seed exactly what executeWorkflow would have written when it parked.
-    stateStore[`cmd_approval_${approvalId}`] = {
-      commandName: "testapproval",
-      args: [],
-      results: [],
-      nextStepIndex: 1,
-      chatId: "999",
-      companyId: "co-1",
+    // Seed exactly what executeWorkflow's park() call would have written.
+    stateStore[`wapp_${approvalId}`] = {
+      payload: {
+        commandName: "testapproval",
+        args: [],
+        results: [],
+        nextStepIndex: 1,
+        chatId: "999",
+        companyId: "co-1",
+        createdAt: Date.now(),
+      },
       createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
     };
     // Seed the command itself so resolveWorkflowApprovalCallback can find it and continue.
     stateStore["commands_co-1"] = [
@@ -135,7 +142,7 @@ describe("BLA-606 repro: callback_query for a parked wait_approval, via handleUp
         id: "cbq-1",
         from: { id: 555, username: "tester" },
         message: { message_id: 42, chat: { id: 999 }, text: "Approve this test?" },
-        data: `cmd_approve_${approvalId}`,
+        data: `pk:wapp:${approvalId}:approve`,
       },
     };
 

@@ -2,6 +2,7 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, editMessage, answerCallbackQuery, escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { METRIC_NAMES, TRUNCATE_LONG } from "./constants.js";
+import { park, unpark, clear, reparkPayload, encodeCallback, decodeCallback, type ParkedFlow } from "./parked-interactions.js";
 
 /**
  * Answer `ask_user_questions` and `request_confirmation` interactions from
@@ -39,8 +40,8 @@ import { METRIC_NAMES, TRUNCATE_LONG } from "./constants.js";
  * belongs to.
  */
 
-const CALLBACK_PREFIX = "int_";
-const STATE_NAMESPACE = "interaction-answers";
+const ASK_FLOW: ParkedFlow = "ask";
+const CONFIRM_FLOW: ParkedFlow = "conf";
 
 export type AskUserQuestionsOption = {
   id: string;
@@ -107,8 +108,6 @@ type ParkedConfirmation = {
   interactionId: string;
 };
 
-type ParkedAnswer = ParkedAskUserQuestions | ParkedConfirmation;
-
 type ReplyMapping = {
   entityId: string;
   entityType: "interaction_reject_reason";
@@ -116,31 +115,9 @@ type ReplyMapping = {
   issueId: string;
 };
 
-let counter = 0;
-/** Short, unique, underscore-free — safe to split out of callback_data. */
-function nextKey(): string {
-  counter = (counter + 1) % 100000;
-  return `${Date.now().toString(36)}${counter.toString(36)}`;
-}
-
-function stateKeyFor(key: string) {
-  return { scopeKind: "instance" as const, namespace: STATE_NAMESPACE, stateKey: key };
-}
-
-async function loadParked(ctx: PluginContext, key: string): Promise<ParkedAnswer | null> {
-  return (await ctx.state.get(stateKeyFor(key))) as ParkedAnswer | null;
-}
-
-async function saveParked(ctx: PluginContext, key: string, value: ParkedAnswer): Promise<void> {
-  await ctx.state.set(stateKeyFor(key), value);
-}
-
-async function clearParked(ctx: PluginContext, key: string): Promise<void> {
-  await ctx.state.delete(stateKeyFor(key));
-}
-
 export function isInteractionAnswerCallback(data: string): boolean {
-  return data.startsWith(CALLBACK_PREFIX);
+  const decoded = decodeCallback(data);
+  return decoded?.flow === ASK_FLOW || decoded?.flow === CONFIRM_FLOW;
 }
 
 /**
@@ -167,14 +144,14 @@ function questionButtons(key: string, question: AskUserQuestionsQuestion, select
   const rows = question.options.map((option, index) => [
     {
       text: optionLabel(option, selectedOptionIds.includes(option.id), multi),
-      callback_data: `${CALLBACK_PREFIX}${key}_o${index}`,
+      callback_data: encodeCallback(ASK_FLOW, key, `o${index}`),
     },
   ]);
   if (multi) {
-    rows.push([{ text: "Continue ▶", callback_data: `${CALLBACK_PREFIX}${key}_done` }]);
+    rows.push([{ text: "Continue ▶", callback_data: encodeCallback(ASK_FLOW, key, "done") }]);
   }
   if (!question.required) {
-    rows.push([{ text: "Skip", callback_data: `${CALLBACK_PREFIX}${key}_skip` }]);
+    rows.push([{ text: "Skip", callback_data: encodeCallback(ASK_FLOW, key, "skip") }]);
   }
   return rows;
 }
@@ -199,8 +176,7 @@ async function sendAskUserQuestionsPrompt(
 ): Promise<boolean> {
   if (!isAskUserQuestionsAnswerable(opts.payload)) return false;
 
-  const key = nextKey();
-  await saveParked(ctx, key, {
+  const key = await park<ParkedAskUserQuestions>(ctx, ASK_FLOW, {
     kind: "ask_user_questions",
     chatId,
     messageThreadId: opts.messageThreadId,
@@ -255,8 +231,7 @@ async function sendRequestConfirmationPrompt(
     messageThreadId?: number;
   },
 ): Promise<boolean> {
-  const key = nextKey();
-  await saveParked(ctx, key, {
+  const key = await park<ParkedConfirmation>(ctx, CONFIRM_FLOW, {
     kind: "request_confirmation",
     chatId,
     messageThreadId: opts.messageThreadId,
@@ -264,9 +239,9 @@ async function sendRequestConfirmationPrompt(
     interactionId: opts.interactionId,
   });
 
-  const buttons = [[{ text: opts.payload.acceptLabel ?? "✅ Accept", callback_data: `${CALLBACK_PREFIX}${key}_accept` }]];
+  const buttons = [[{ text: opts.payload.acceptLabel ?? "✅ Accept", callback_data: encodeCallback(CONFIRM_FLOW, key, "accept") }]];
   if (!opts.payload.rejectRequiresReason) {
-    buttons[0].push({ text: opts.payload.rejectLabel ?? "❌ Reject", callback_data: `${CALLBACK_PREFIX}${key}_reject` });
+    buttons[0].push({ text: opts.payload.rejectLabel ?? "❌ Reject", callback_data: encodeCallback(CONFIRM_FLOW, key, "reject") });
   }
 
   const messageId = await sendMessage(ctx, token, chatId, renderConfirmationText(opts.payload), {
@@ -420,13 +395,13 @@ async function advanceAskUserQuestions(
   const nextIndex = parked.questionIndex + 1;
 
   if (nextIndex >= parked.questions.length) {
-    await clearParked(ctx, key);
+    await clear(ctx, ASK_FLOW, key);
     await finishAskUserQuestions(ctx, token, baseUrl, boardApiToken, { ...parked, answers }, messageId);
     return;
   }
 
   const next: ParkedAskUserQuestions = { ...parked, answers, questionIndex: nextIndex, selectedOptionIds: [] };
-  await saveParked(ctx, key, next);
+  await reparkPayload(ctx, ASK_FLOW, key, next);
   const question = parked.questions[nextIndex];
   await sendMessage(ctx, token, parked.chatId, renderQuestionText(question, nextIndex, parked.questions.length), {
     parseMode: "MarkdownV2",
@@ -448,7 +423,7 @@ async function handleAskUserQuestionsAction(
 ): Promise<void> {
   const question = parked.questions[parked.questionIndex];
   if (!question) {
-    await clearParked(ctx, key);
+    await clear(ctx, ASK_FLOW, key);
     await answerCallbackQuery(ctx, token, callbackQueryId, "This question flow is out of sync. Use /decisions to retry.");
     return;
   }
@@ -500,7 +475,7 @@ async function handleAskUserQuestionsAction(
   const selectedOptionIds = parked.selectedOptionIds.includes(option.id)
     ? parked.selectedOptionIds.filter((id) => id !== option.id)
     : [...parked.selectedOptionIds, option.id];
-  await saveParked(ctx, key, { ...parked, selectedOptionIds });
+  await reparkPayload(ctx, ASK_FLOW, key, { ...parked, selectedOptionIds });
   await answerCallbackQuery(ctx, token, callbackQueryId, selectedOptionIds.includes(option.id) ? `Added: ${option.label}` : `Removed: ${option.label}`);
   if (messageId) {
     await editMessage(ctx, token, parked.chatId, messageId, renderQuestionText(question, parked.questionIndex, parked.questions.length), {
@@ -521,7 +496,7 @@ async function handleConfirmationAction(
   callbackQueryId: string,
   messageId?: number,
 ): Promise<void> {
-  await clearParked(ctx, key);
+  await clear(ctx, CONFIRM_FLOW, key);
   try {
     const result = await postInteractionAction(ctx, baseUrl, parked.issueId, parked.interactionId, action, {}, boardApiToken);
     await ctx.metrics.write(METRIC_NAMES.interactionAnswered, 1);
@@ -539,9 +514,9 @@ async function handleConfirmationAction(
 }
 
 /**
- * Resolve an `int_`-prefixed callback_query. Everything needed to act (issue
- * id, interaction id, in-progress answers) lives in the parked state under
- * `key` — the callback only carried the key and the tapped action.
+ * Resolve an `ask`/`conf`-flow callback_query. Everything needed to act
+ * (issue id, interaction id, in-progress answers) lives in the parked state
+ * under `key` — the callback only carried the key and the tapped action.
  */
 export async function resolveInteractionAnswerCallback(
   ctx: PluginContext,
@@ -552,28 +527,25 @@ export async function resolveInteractionAnswerCallback(
   boardApiToken: string | undefined,
   messageId?: number,
 ): Promise<boolean> {
-  if (!isInteractionAnswerCallback(data)) return false;
-  const body = data.slice(CALLBACK_PREFIX.length);
-  const separator = body.lastIndexOf("_");
-  if (separator <= 0) {
-    await answerCallbackQuery(ctx, token, callbackQueryId, "Unknown action");
-    return true;
-  }
-  const key = body.slice(0, separator);
-  const action = body.slice(separator + 1);
+  const decoded = decodeCallback(data);
+  if (!decoded || (decoded.flow !== ASK_FLOW && decoded.flow !== CONFIRM_FLOW)) return false;
+  const { flow, key, action } = decoded;
 
-  const parked = await loadParked(ctx, key);
-  if (!parked) {
+  const result = flow === ASK_FLOW
+    ? await unpark<ParkedAskUserQuestions>(ctx, flow, key)
+    : await unpark<ParkedConfirmation>(ctx, flow, key);
+  if (result.status !== "live") {
     await answerCallbackQuery(ctx, token, callbackQueryId, "This has expired or was already answered. Use /decisions to check again.");
     return true;
   }
+  const parked = result.payload;
 
   // Resolved against the interaction as it stands NOW, not as it was when the
   // message was sent — it may have been withdrawn, expired, or answered
   // elsewhere (web UI, another chat) since.
   const fresh = await fetchInteraction(ctx, baseUrl, parked.issueId, parked.interactionId, boardApiToken);
   if (!fresh || fresh.status !== "pending") {
-    await clearParked(ctx, key);
+    await clear(ctx, flow, key);
     const status = fresh?.status ?? "gone";
     await answerCallbackQuery(ctx, token, callbackQueryId, `This is no longer pending (${status}). Use /decisions to check again.`);
     if (messageId) {

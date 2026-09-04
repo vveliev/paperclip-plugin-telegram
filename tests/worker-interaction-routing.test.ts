@@ -85,7 +85,7 @@ beforeEach(() => {
 });
 
 describe("handleUpdate — interaction-answer callback routing", () => {
-  it("routes an int_-prefixed callback_query to resolveInteractionAnswerCallback", async () => {
+  it("routes an ask-flow callback_query to resolveInteractionAnswerCallback", async () => {
     const ctx = mockCtx();
     const update = {
       update_id: 1,
@@ -93,7 +93,7 @@ describe("handleUpdate — interaction-answer callback routing", () => {
         id: "cbq-1",
         from: { id: 1, username: "alice" },
         message: { message_id: 5, chat: { id: 999 }, text: "Ship it?" },
-        data: "int_abc123_accept",
+        data: "pk:ask:abc123:accept",
       },
     } as Parameters<typeof handleUpdate>[3];
 
@@ -101,14 +101,14 @@ describe("handleUpdate — interaction-answer callback routing", () => {
 
     expect(resolveCalls).toHaveLength(1);
     const [, , data, callbackQueryId, , , messageId] = resolveCalls[0];
-    expect(data).toBe("int_abc123_accept");
+    expect(data).toBe("pk:ask:abc123:accept");
     expect(callbackQueryId).toBe("cbq-1");
     expect(messageId).toBe(5);
   });
 });
 
 describe("handleUpdate — decisions 'Show more' callback routing (BLA-622)", () => {
-  it("routes a dec_more_-prefixed callback_query to resolveDecisionsMoreCallback with the resolved company", async () => {
+  it("routes a dm-flow callback_query to resolveDecisionsMoreCallback with the resolved company", async () => {
     const ctx = mockCtx();
     stateStore[":msg_999_5"] = { companyId: "co-1" };
 
@@ -118,7 +118,7 @@ describe("handleUpdate — decisions 'Show more' callback routing (BLA-622)", ()
         id: "cbq-1",
         from: { id: 1, username: "alice" },
         message: { message_id: 5, chat: { id: 999 }, text: "…and 70 more waiting.", message_thread_id: 42 },
-        data: "dec_more_5",
+        data: "pk:dm:5:more",
       },
     } as Parameters<typeof handleUpdate>[3];
 
@@ -128,7 +128,7 @@ describe("handleUpdate — decisions 'Show more' callback routing (BLA-622)", ()
     const [, , data, callbackQueryId, chatId, opts] = decisionsMoreCalls[0] as [
       unknown, unknown, string, string, string, { messageThreadId?: number; companyId: string; baseUrl: string },
     ];
-    expect(data).toBe("dec_more_5");
+    expect(data).toBe("pk:dm:5:more");
     expect(callbackQueryId).toBe("cbq-1");
     expect(chatId).toBe("999");
     expect(opts).toMatchObject({ messageThreadId: 42, companyId: "co-1", baseUrl });
@@ -143,7 +143,7 @@ describe("handleUpdate — decisions 'Show more' callback routing (BLA-622)", ()
         id: "cbq-1",
         from: { id: 1, username: "alice" },
         message: { message_id: 5, chat: { id: 999 }, text: "…and 70 more waiting." },
-        data: "dec_more_5",
+        data: "pk:dm:5:more",
       },
     } as Parameters<typeof handleUpdate>[3];
 

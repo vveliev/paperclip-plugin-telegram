@@ -259,7 +259,7 @@ describe("answerCallbackQuery", () => {
     expect(ctx.logger.error).not.toHaveBeenCalled();
   });
 
-  it("logs Telegram's rejection reason instead of swallowing it (BLA-606)", async () => {
+  it("logs Telegram's rejection reason instead of swallowing it", async () => {
     // A 200 response with ok:false (e.g. an expired callback query) never
     // throws, so this branch is the only thing that makes a rejection
     // observable -- without it the button press vanishes without a trace.

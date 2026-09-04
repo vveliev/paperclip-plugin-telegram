@@ -120,10 +120,11 @@ describe("isAskUserQuestionsAnswerable", () => {
 });
 
 describe("isInteractionAnswerCallback", () => {
-  it("recognizes the int_ prefix and nothing else", () => {
-    expect(isInteractionAnswerCallback("int_abc_accept")).toBe(true);
-    expect(isInteractionAnswerCallback("approve_123")).toBe(false);
-    expect(isInteractionAnswerCallback("dec_abc_0")).toBe(false);
+  it("recognizes the ask/conf flows and nothing else", () => {
+    expect(isInteractionAnswerCallback("pk:ask:abc:accept")).toBe(true);
+    expect(isInteractionAnswerCallback("pk:conf:abc:accept")).toBe(true);
+    expect(isInteractionAnswerCallback("pk:apr:123:approve")).toBe(false);
+    expect(isInteractionAnswerCallback("pk:dm:abc:more")).toBe(false);
   });
 });
 
@@ -235,7 +236,7 @@ describe("fetchInteraction", () => {
 describe("resolveInteractionAnswerCallback — expiry and staleness", () => {
   it("reports expired when the key has no parked state (restart or already-resolved)", async () => {
     const ctx = mockCtx();
-    const handled = await resolveInteractionAnswerCallback(ctx, "tok", "int_nope_accept", "cbid", "http://x", "board-tok");
+    const handled = await resolveInteractionAnswerCallback(ctx, "tok", "pk:conf:nope:accept", "cbid", "http://x", "board-tok");
     expect(handled).toBe(true);
     expect(answers[0].text).toContain("expired or was already answered");
     expect(apiCalls).toHaveLength(0);
@@ -243,7 +244,7 @@ describe("resolveInteractionAnswerCallback — expiry and staleness", () => {
 
   it("ignores non-interaction callback data", async () => {
     const ctx = mockCtx();
-    const handled = await resolveInteractionAnswerCallback(ctx, "tok", "approve_123", "cbid", "http://x", "board-tok");
+    const handled = await resolveInteractionAnswerCallback(ctx, "tok", "pk:apr:123:approve", "cbid", "http://x", "board-tok");
     expect(handled).toBe(false);
   });
 
@@ -254,16 +255,16 @@ describe("resolveInteractionAnswerCallback — expiry and staleness", () => {
       kind: "request_confirmation",
       payload: { version: 1, prompt: "Ship it?" },
     }, { issueId: "issue-1", companyId: "co-1" });
-    const key = lastCallbackData().split("_")[1];
+    const key = lastCallbackData().split(":")[2];
     freshInteractions = [{ id: "int-1", status: "expired", kind: "request_confirmation" }];
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_accept`, "cbid", "http://x", "board-tok", 42);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:conf:${key}:accept`, "cbid", "http://x", "board-tok", 42);
 
     expect(answers.at(-1)!.text).toContain("no longer pending");
     expect(apiCalls.some((c) => c.method === "POST")).toBe(false);
     // Cleared: a second tap gets the generic expired message, not another staleness check.
     apiCalls = [];
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_accept`, "cbid", "http://x", "board-tok", 42);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:conf:${key}:accept`, "cbid", "http://x", "board-tok", 42);
     expect(apiCalls).toHaveLength(0);
   });
 });
@@ -282,14 +283,14 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
       },
     }, { issueId: "issue-1" });
     freshInteractions = [{ id: "int-1", status: "pending", kind: "ask_user_questions" }];
-    return lastCallbackData().split("_")[1];
+    return lastCallbackData().split(":")[2];
   }
 
   it("advances to the next question on a single-select tap", async () => {
     const ctx = mockCtx();
     const key = await parkTwoQuestionFlow(ctx);
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o1`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o1`, "cbid", "http://x", "board-tok", 1);
 
     expect(sent).toHaveLength(2);
     expect(sent[1].text).toContain("Question 2 of 2");
@@ -301,10 +302,10 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
     const key = await parkTwoQuestionFlow(ctx);
     postResponses.respond = { status: "answered" };
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o0`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o0`, "cbid", "http://x", "board-tok", 1);
     // Multi-select toggle then submit.
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o1`, "cbid", "http://x", "board-tok", 2);
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_done`, "cbid", "http://x", "board-tok", 2);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o1`, "cbid", "http://x", "board-tok", 2);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:done`, "cbid", "http://x", "board-tok", 2);
 
     const respondCall = apiCalls.find((c) => c.url.endsWith("/respond"));
     expect(respondCall).toBeDefined();
@@ -320,9 +321,9 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
   it("refuses to advance past a required multi-select question with nothing picked", async () => {
     const ctx = mockCtx();
     const key = await parkTwoQuestionFlow(ctx);
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o0`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o0`, "cbid", "http://x", "board-tok", 1);
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_done`, "cbid", "http://x", "board-tok", 2);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:done`, "cbid", "http://x", "board-tok", 2);
 
     expect(answers.at(-1)!.text).toContain("Pick at least one");
     expect(sent).toHaveLength(2); // no third message sent — did not advance
@@ -331,9 +332,9 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
   it("refuses to skip a required question even if the action is forged", async () => {
     const ctx = mockCtx();
     const key = await parkTwoQuestionFlow(ctx);
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o0`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o0`, "cbid", "http://x", "board-tok", 1);
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_skip`, "cbid", "http://x", "board-tok", 2);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:skip`, "cbid", "http://x", "board-tok", 2);
 
     expect(answers.at(-1)!.text).toContain("requires an answer");
     expect(apiCalls.some((c) => c.method === "POST")).toBe(false);
@@ -347,10 +348,10 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
       payload: { version: 1, questions: [pickSafeQuestion({ required: false })] },
     }, { issueId: "issue-1" });
     freshInteractions = [{ id: "int-2", status: "pending", kind: "ask_user_questions" }];
-    const key = lastCallbackData().split("_")[1];
+    const key = lastCallbackData().split(":")[2];
     postResponses.respond = { status: "answered" };
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_skip`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:skip`, "cbid", "http://x", "board-tok", 1);
 
     const respondCall = apiCalls.find((c) => c.url.endsWith("/respond"));
     expect(respondCall!.body).toEqual({ answers: [{ questionId: "q1", optionIds: [] }] });
@@ -359,9 +360,9 @@ describe("resolveInteractionAnswerCallback — ask_user_questions", () => {
   it("toggles a multi-select option in place without advancing", async () => {
     const ctx = mockCtx();
     const key = await parkTwoQuestionFlow(ctx);
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o0`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o0`, "cbid", "http://x", "board-tok", 1);
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_o0`, "cbid", "http://x", "board-tok", 2);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:ask:${key}:o0`, "cbid", "http://x", "board-tok", 2);
 
     expect(sent).toHaveLength(2); // no new message — same question re-rendered
     expect(edited).toHaveLength(1);
@@ -378,7 +379,7 @@ describe("resolveInteractionAnswerCallback — request_confirmation", () => {
     }, { issueId: "issue-1", companyId: "co-1" });
     freshInteractions = [{ id: "int-1", status: "pending", kind: "request_confirmation" }];
     const keyboard = sent.at(-1)!.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>;
-    return keyboard[0][0].callback_data.split("_")[1];
+    return keyboard[0][0].callback_data.split(":")[2];
   }
 
   it("accepts and edits the message on tap", async () => {
@@ -386,7 +387,7 @@ describe("resolveInteractionAnswerCallback — request_confirmation", () => {
     const key = await parkConfirmation(ctx);
     postResponses.accept = { status: "accepted" };
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_accept`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:conf:${key}:accept`, "cbid", "http://x", "board-tok", 1);
 
     expect(apiCalls.find((c) => c.url.endsWith("/accept"))).toBeDefined();
     expect(edited.at(-1)!.text).toContain("Accepted");
@@ -397,7 +398,7 @@ describe("resolveInteractionAnswerCallback — request_confirmation", () => {
     const key = await parkConfirmation(ctx);
     postResponses.reject = { status: "rejected" };
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_reject`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:conf:${key}:reject`, "cbid", "http://x", "board-tok", 1);
 
     const rejectCall = apiCalls.find((c) => c.url.endsWith("/reject"));
     expect(rejectCall!.body).toEqual({});
@@ -408,10 +409,10 @@ describe("resolveInteractionAnswerCallback — request_confirmation", () => {
     const ctx = mockCtx();
     const key = await parkConfirmation(ctx);
     postResponses.accept = { status: "accepted" };
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_accept`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:conf:${key}:accept`, "cbid", "http://x", "board-tok", 1);
     apiCalls = [];
 
-    await resolveInteractionAnswerCallback(ctx, "tok", `int_${key}_accept`, "cbid", "http://x", "board-tok", 1);
+    await resolveInteractionAnswerCallback(ctx, "tok", `pk:conf:${key}:accept`, "cbid", "http://x", "board-tok", 1);
 
     expect(apiCalls).toHaveLength(0);
     expect(answers.at(-1)!.text).toContain("expired or was already answered");

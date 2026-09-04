@@ -180,8 +180,15 @@ describe("GIF-150 sites 4+5: handoff cleanup (handleHandoffApproval, handleHando
     };
   }
 
+  // Handoff parking moved onto parked-interactions.ts, whose row key
+  // is `ho_<handoffId>` (an envelope, not the raw PendingHandoff) rather than
+  // this test's original `handoff_<id>` — seed what `park()` would write.
+  function seedParkedHandoff(overrides: Partial<Record<string, unknown>> = {}) {
+    stateStore["ho_h1"] = { payload: pendingHandoff(overrides), createdAt: Date.now(), expiresAt: Date.now() + 60_000 };
+  }
+
   it("clears the pending handoff after approval without throwing", async () => {
-    stateStore["handoff_h1"] = pendingHandoff();
+    seedParkedHandoff();
     stateStore["sessions_chat-1_42"] = [
       activeSession({ sessionId: "s1", agentName: "builder", agentDisplayName: "Builder" }),
       activeSession({ sessionId: "s2", agentId: "a2", agentName: "tester", agentDisplayName: "Tester" }),
@@ -195,11 +202,11 @@ describe("GIF-150 sites 4+5: handoff cleanup (handleHandoffApproval, handleHando
       handleHandoffApproval(ctx, "token", "h1", "alice", "cb-1", "chat-1", 99),
     ).resolves.toBeUndefined();
 
-    expect(stateStore).not.toHaveProperty("handoff_h1");
+    expect(stateStore).not.toHaveProperty("ho_h1");
   });
 
   it("clears the pending handoff after rejection without throwing", async () => {
-    stateStore["handoff_h1"] = pendingHandoff();
+    seedParkedHandoff();
     const ctx = mockCtx();
 
     await expect(
@@ -207,6 +214,6 @@ describe("GIF-150 sites 4+5: handoff cleanup (handleHandoffApproval, handleHando
     ).resolves.toBeUndefined();
 
     expect(sentMessages[0]?.text).toContain("rejected");
-    expect(stateStore).not.toHaveProperty("handoff_h1");
+    expect(stateStore).not.toHaveProperty("ho_h1");
   });
 });

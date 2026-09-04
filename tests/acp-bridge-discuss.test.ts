@@ -63,8 +63,8 @@ describe("handleDiscussToolCall - events.emit rejection is caught, not dropped o
 
     expect(JSON.parse(result.content!).status).toBe("started");
     expect(ctx.logger.error).toHaveBeenCalledWith(
-      "Failed to emit acp-spawn for auto-spawned discussion target",
-      expect.objectContaining({ chatId: "chat-1", error: expect.stringContaining("host RPC unavailable") }),
+      "Failed to emit host event",
+      expect.objectContaining({ site: "discussion target auto-spawn", chatId: "chat-1", error: expect.stringContaining("host RPC unavailable") }),
     );
   });
 
@@ -92,8 +92,8 @@ describe("handleDiscussToolCall - events.emit rejection is caught, not dropped o
 
     expect(JSON.parse(result.content!).status).toBe("started");
     expect(ctx.logger.error).toHaveBeenCalledWith(
-      "Failed to emit acp-spawn for discussion start",
-      expect.objectContaining({ sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
+      "Failed to emit host event",
+      expect.objectContaining({ site: "discussion start", sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
     );
   });
 });
@@ -155,8 +155,8 @@ describe("checkConversationLoopContinuation (via handleAcpOutput) - events.emit 
     })).resolves.toBeUndefined();
 
     expect(ctx.logger.error).toHaveBeenCalledWith(
-      "Failed to emit acp-spawn for discussion turn",
-      expect.objectContaining({ sessionId: "target-session", error: expect.stringContaining("host RPC unavailable") }),
+      "Failed to emit host event",
+      expect.objectContaining({ site: "discussion turn", sessionId: "target-session", error: expect.stringContaining("host RPC unavailable") }),
     );
     // The rejection must not have aborted the turn: the loop still advanced.
     const loop = stateStore["loop_chat-1_42"] as Record<string, unknown>;

@@ -105,7 +105,7 @@ const approvalItem = {
   sourceKind: "approval",
   subject: {
     kind: "approval",
-    id: "5f3c9a11-9c3e-4c4a-8b1a-1234567890ab",
+    id: "approval-0000-0000-0000-000000000001",
     title: "Deploy backend to prod",
     href: "/BLA/issues/BLA-200#approval-5f3c9a11",
   },
@@ -495,7 +495,7 @@ describe("toAttentionItem — approval fields (BLA-622)", () => {
   it("extracts approvalId from subject.id for an approval item", () => {
     const item = toAttentionItem(approvalItem);
     expect(item.sourceKind).toBe("approval");
-    expect(item.approvalId).toBe("5f3c9a11-9c3e-4c4a-8b1a-1234567890ab");
+    expect(item.approvalId).toBe("approval-0000-0000-0000-000000000001");
   });
 
   it("leaves approvalId undefined for a non-approval item", () => {
@@ -516,7 +516,7 @@ describe("sendAttentionList — inline approving (BLA-622)", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0]).not.toContain("https://paperclip.example/BLA/issues/BLA-200");
     expect(sentOptions[0]).toMatchObject({
-      inlineKeyboard: [[{ text: "✅ Approve", callback_data: "approve_5f3c9a11-9c3e-4c4a-8b1a-1234567890ab" }]],
+      inlineKeyboard: [[{ text: "✅ Approve", callback_data: "pk:apr:approval-0000-0000-0000-000000000001:approve" }]],
     });
   });
 
@@ -563,7 +563,7 @@ describe("sendAttentionList — pagination (BLA-622)", () => {
 
     const trailerOptions = sentOptions.at(-1);
     expect(trailerOptions).toMatchObject({
-      inlineKeyboard: [[{ text: `Show more (+${DECISIONS_PAGE_SIZE})`, callback_data: "dec_more_5" }]],
+      inlineKeyboard: [[{ text: `Show more (+${DECISIONS_PAGE_SIZE})`, callback_data: "pk:dm:5:more" }]],
     });
   });
 
@@ -592,10 +592,10 @@ describe("sendAttentionList — pagination (BLA-622)", () => {
 });
 
 describe("isDecisionsMoreCallback", () => {
-  it("recognises the dec_more_ prefix and rejects anything else", () => {
-    expect(isDecisionsMoreCallback("dec_more_5")).toBe(true);
-    expect(isDecisionsMoreCallback("approve_abc")).toBe(false);
-    expect(isDecisionsMoreCallback("int_abc_accept")).toBe(false);
+  it("recognises the dm flow and rejects anything else", () => {
+    expect(isDecisionsMoreCallback("pk:dm:5:more")).toBe(true);
+    expect(isDecisionsMoreCallback("pk:apr:abc:approve")).toBe(false);
+    expect(isDecisionsMoreCallback("pk:ask:abc:accept")).toBe(false);
   });
 });
 
@@ -603,7 +603,7 @@ describe("resolveDecisionsMoreCallback", () => {
   const opts = { baseUrl: "http://x", publicUrl: "https://paperclip.example", companyId: "co-1", boardApiToken: "tok" };
 
   it("answers 'Could not load more' and fetches nothing for a malformed offset", async () => {
-    await resolveDecisionsMoreCallback(makeCtx(), "tok", "dec_more_notanumber", "cbq-1", "chat-1", opts);
+    await resolveDecisionsMoreCallback(makeCtx(), "tok", "pk:dm:notanumber:more", "cbq-1", "chat-1", opts);
 
     expect(answerCallbackCalls).toEqual([{ callbackQueryId: "cbq-1", text: "Could not load more." }]);
     expect(apiCalls).toHaveLength(0);
@@ -612,7 +612,7 @@ describe("resolveDecisionsMoreCallback", () => {
   it("fetches the widened page, capped at the endpoint's own max, and renders past the given offset", async () => {
     response = { totalCount: 75, items: Array.from({ length: 25 }, () => questionItem) };
 
-    await resolveDecisionsMoreCallback(makeCtx(), "tok", "dec_more_5", "cbq-1", "chat-1", opts);
+    await resolveDecisionsMoreCallback(makeCtx(), "tok", "pk:dm:5:more", "cbq-1", "chat-1", opts);
 
     expect(answerCallbackCalls[0]).toMatchObject({ callbackQueryId: "cbq-1", text: "Loading more…" });
     expect(apiCalls[0]).toBe(`http://x/api/companies/co-1/attention?limit=${5 + DECISIONS_PAGE_SIZE}`);
@@ -623,7 +623,7 @@ describe("resolveDecisionsMoreCallback", () => {
   it("reports a readable error instead of throwing when the fetch fails", async () => {
     shouldThrow = new Error('Paperclip API request failed with 403: {"error":"Board access required"}');
 
-    await resolveDecisionsMoreCallback(makeCtx(), "tok", "dec_more_5", "cbq-1", "chat-1", opts);
+    await resolveDecisionsMoreCallback(makeCtx(), "tok", "pk:dm:5:more", "cbq-1", "chat-1", opts);
 
     expect(sent.at(-1)).toContain("no board access");
   });

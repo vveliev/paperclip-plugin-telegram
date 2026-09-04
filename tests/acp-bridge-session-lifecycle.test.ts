@@ -129,8 +129,8 @@ describe("/acp cancel / close - events.emit rejection is caught, not dropped or 
     await expect(handleAcpCommand(ctx, "token", "chat-1", "cancel", 42, "company-1")).resolves.toBeUndefined();
 
     expect(ctx.logger.error).toHaveBeenCalledWith(
-      "Failed to emit acp-spawn cancel",
-      expect.objectContaining({ sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
+      "Failed to emit host event",
+      expect.objectContaining({ site: "session cancel", sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
     );
     expect(sentMessages.some((m) => m.text.includes("Cancellation requested"))).toBe(true);
   });
@@ -143,8 +143,8 @@ describe("/acp cancel / close - events.emit rejection is caught, not dropped or 
     await expect(handleAcpCommand(ctx, "token", "chat-1", "close", 42, "company-1")).resolves.toBeUndefined();
 
     expect(ctx.logger.error).toHaveBeenCalledWith(
-      "Failed to emit acp-spawn close",
-      expect.objectContaining({ sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
+      "Failed to emit host event",
+      expect.objectContaining({ site: "session close", sessionId: "s1", error: expect.stringContaining("host RPC unavailable") }),
     );
     const sessions = stateStore["sessions_chat-1_42"] as Array<Record<string, unknown>>;
     expect(sessions[0].status).toBe("closed");

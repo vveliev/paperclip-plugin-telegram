@@ -182,8 +182,8 @@ describe("/acp spawn - events.emit rejection is caught, not dropped or propagate
     const sessions = savedSessions();
     expect(sessions[0].transport).toBe("acp");
     expect(ctx.logger.error).toHaveBeenCalledWith(
-      "Failed to emit acp-spawn",
-      expect.objectContaining({ chatId: "chat-1", error: expect.stringContaining("host RPC unavailable") }),
+      "Failed to emit host event",
+      expect.objectContaining({ site: "session spawn", chatId: "chat-1", error: expect.stringContaining("host RPC unavailable") }),
     );
     // The rejection must not have aborted handleAcpSpawn(): the user is still told.
     expect(sentMessages.some((m) => m.text.includes("Agent Session Started"))).toBe(true);
