@@ -13,7 +13,11 @@
 name: internal-refs
 
 on:
+  # `edited` matters: the title and body are scanned, and without it a body can
+  # be edited to add a leak after the check has already gone green, with nothing
+  # re-running. The default types are opened/synchronize/reopened only.
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main, prerelease]
 
