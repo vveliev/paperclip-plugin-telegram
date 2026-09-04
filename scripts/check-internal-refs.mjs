@@ -96,8 +96,15 @@ function git(args) {
   return execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
-function scan(text, label, findings) {
+/**
+ * @param exclude pattern ids to skip for this text. A branch name derived from
+ *   an issue id is metadata that reveals nothing -- the UUID rule exists to
+ *   catch instance/company/agent ids leaking into published *content*, and
+ *   applying it to a branch name would forbid the safest template available.
+ */
+function scan(text, label, findings, exclude = []) {
   for (const p of PATTERNS) {
+    if (exclude.includes(p.id)) continue;
     p.re.lastIndex = 0;
     for (const m of text.matchAll(p.re)) {
       if (p.ignore && p.ignore.test(m[0])) continue;
@@ -146,7 +153,7 @@ if (mode === "--text") {
     lineNo++;
   }
   scan(git(["log", "--format=%B%n%an <%ae>", arg]), "commit messages", findings);
-  scan(git(["rev-parse", "--abbrev-ref", "HEAD"]), "branch name", findings);
+  scan(git(["rev-parse", "--abbrev-ref", "HEAD"]), "branch name", findings, ["instance-uuid"]);
 } else {
   console.error("usage: check-internal-refs.mjs --staged | --range A..B | --message FILE | --text ENVVAR");
   process.exit(2);
