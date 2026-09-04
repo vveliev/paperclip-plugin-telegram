@@ -127,6 +127,10 @@ export async function checkWatches(
   token: string,
   config: { maxSuggestionsPerHourPerCompany: number; watchDeduplicationWindowMs: number },
   companyId?: string,
+  // Defaults to the wall clock but should be the job's `scheduledAt` (see
+  // `check-watches` in worker.ts) so the hourly rate-limit bucket and dedup
+  // window run against a controlled clock instead of real time.
+  now: number = Date.now(),
 ): Promise<void> {
   const companyIds = companyId
     ? [companyId]
@@ -134,7 +138,7 @@ export async function checkWatches(
 
   for (const currentCompanyId of companyIds) {
     try {
-      await checkWatchesForCompany(ctx, token, currentCompanyId, config);
+      await checkWatchesForCompany(ctx, token, currentCompanyId, config, now);
     } catch (err) {
       ctx.logger.error("Watch check failed for company", { companyId: currentCompanyId, error: String(err) });
     }
@@ -146,12 +150,13 @@ async function checkWatchesForCompany(
   token: string,
   companyId: string,
   config: { maxSuggestionsPerHourPerCompany: number; watchDeduplicationWindowMs: number },
+  now: number,
 ): Promise<void> {
   const watches = await getWatchRegistry(ctx, companyId);
   if (watches.length === 0) return;
 
   // Rate limiting: check how many suggestions we've sent this hour
-  const hourlyCount = await getHourlySuggestionCount(ctx, companyId);
+  const hourlyCount = await getHourlySuggestionCount(ctx, companyId, now);
   if (hourlyCount >= config.maxSuggestionsPerHourPerCompany) {
     ctx.logger.info("Watch suggestions rate-limited for company", { companyId, hourlyCount });
     return;
@@ -163,13 +168,13 @@ async function checkWatchesForCompany(
     if (hourlyCount + sentThisRun >= config.maxSuggestionsPerHourPerCompany) break;
 
     try {
-      const entities = await evaluateWatch(ctx, watch, companyId);
+      const entities = await evaluateWatch(ctx, watch, companyId, now);
 
       for (const entity of entities) {
         if (hourlyCount + sentThisRun >= config.maxSuggestionsPerHourPerCompany) break;
 
         // Dedup check
-        const isDuplicate = await checkDedup(ctx, watch.watchId, entity.id, config.watchDeduplicationWindowMs);
+        const isDuplicate = await checkDedup(ctx, watch.watchId, entity.id, config.watchDeduplicationWindowMs, now);
         if (isDuplicate) continue;
 
         // Send suggestion
@@ -190,7 +195,7 @@ async function checkWatchesForCompany(
         sentThisRun++;
 
         // Update watch last triggered
-        watch.lastTriggeredAt = new Date().toISOString();
+        watch.lastTriggeredAt = new Date(now).toISOString();
       }
     } catch (err) {
       ctx.logger.error("Watch evaluation failed", { watchId: watch.watchId, error: String(err) });
@@ -201,7 +206,7 @@ async function checkWatchesForCompany(
   if (sentThisRun > 0) {
     await saveWatchRegistry(ctx, companyId, watches);
     await ctx.metrics.write(METRIC_NAMES.suggestionsEmitted, sentThisRun);
-    await incrementHourlySuggestionCount(ctx, companyId, sentThisRun);
+    await incrementHourlySuggestionCount(ctx, companyId, sentThisRun, now);
   }
 }
 
@@ -211,6 +216,7 @@ async function evaluateWatch(
   ctx: PluginContext,
   watch: Watch,
   companyId: string,
+  now: number,
 ): Promise<Array<{ id: string; [key: string]: unknown }>> {
   const matches: Array<{ id: string; [key: string]: unknown }> = [];
 
@@ -219,7 +225,7 @@ async function evaluateWatch(
       const issues = await ctx.issues.list({ companyId, limit: 100 });
       for (const issue of issues) {
         const record = issue as unknown as Record<string, unknown>;
-        if (matchesConditions(record, watch.conditions)) {
+        if (matchesConditions(record, watch.conditions, now)) {
           matches.push({ id: issue.id, ...record });
         }
       }
@@ -229,7 +235,7 @@ async function evaluateWatch(
       const agents = await ctx.agents.list({ companyId });
       for (const agent of agents) {
         const record = agent as unknown as Record<string, unknown>;
-        if (matchesConditions(record, watch.conditions)) {
+        if (matchesConditions(record, watch.conditions, now)) {
           matches.push({ id: agent.id, ...record });
         }
       }
@@ -245,7 +251,7 @@ async function evaluateWatch(
 
       if (customData) {
         for (const item of customData) {
-          if (matchesConditions(item, watch.conditions)) {
+          if (matchesConditions(item, watch.conditions, now)) {
             matches.push({ id: str(item.id, "unknown"), ...item });
           }
         }
@@ -257,15 +263,14 @@ async function evaluateWatch(
   return matches;
 }
 
-function matchesConditions(record: Record<string, unknown>, conditions: WatchCondition[]): boolean {
-  const now = Date.now();
+function matchesConditions(record: Record<string, unknown>, conditions: WatchCondition[], now: number): boolean {
   const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
 
   for (const condition of conditions) {
     const fieldValue = record[condition.field];
 
     let compareValue = condition.value;
-    if (compareValue === "{{now}}") compareValue = new Date().toISOString();
+    if (compareValue === "{{now}}") compareValue = new Date(now).toISOString();
     if (compareValue === "{{7daysAgo}}") compareValue = new Date(sevenDaysAgo).toISOString();
 
     switch (condition.operator) {
@@ -307,6 +312,7 @@ async function checkDedup(
   watchId: string,
   entityId: string,
   windowMs: number,
+  now: number,
 ): Promise<boolean> {
   const log = await ctx.state.get({
     scopeKind: "instance",
@@ -316,7 +322,7 @@ async function checkDedup(
   if (!log) return false;
 
   const sentAt = new Date(log.sentAt).getTime();
-  return Date.now() - sentAt < windowMs;
+  return now - sentAt < windowMs;
 }
 
 async function recordSuggestion(
@@ -335,8 +341,8 @@ async function recordSuggestion(
   );
 }
 
-async function getHourlySuggestionCount(ctx: PluginContext, companyId: string): Promise<number> {
-  const key = `suggestion_hourly_${companyId}_${new Date().toISOString().slice(0, 13)}`;
+async function getHourlySuggestionCount(ctx: PluginContext, companyId: string, now: number): Promise<number> {
+  const key = `suggestion_hourly_${companyId}_${new Date(now).toISOString().slice(0, 13)}`;
   const count = await ctx.state.get({
     scopeKind: "instance",
     stateKey: key,
@@ -344,9 +350,9 @@ async function getHourlySuggestionCount(ctx: PluginContext, companyId: string): 
   return count ?? 0;
 }
 
-async function incrementHourlySuggestionCount(ctx: PluginContext, companyId: string, amount: number): Promise<void> {
-  const key = `suggestion_hourly_${companyId}_${new Date().toISOString().slice(0, 13)}`;
-  const current = await getHourlySuggestionCount(ctx, companyId);
+async function incrementHourlySuggestionCount(ctx: PluginContext, companyId: string, amount: number, now: number): Promise<void> {
+  const key = `suggestion_hourly_${companyId}_${new Date(now).toISOString().slice(0, 13)}`;
+  const current = await getHourlySuggestionCount(ctx, companyId, now);
   await ctx.state.set(
     { scopeKind: "instance", stateKey: key },
     current + amount,
