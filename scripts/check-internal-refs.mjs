@@ -91,7 +91,11 @@ const mode = process.argv[2];
 const arg = process.argv[3];
 const findings = [];
 
-if (mode === "--message") {
+if (mode === "--text") {
+  // Reads from an env var, never argv: PR titles and bodies are attacker-
+  // controlled text and must not be interpolated into a shell command.
+  scan(process.env[arg ?? "SCAN_TEXT"] ?? "", "pull request title/body", findings);
+} else if (mode === "--message") {
   scan(readFileSync(arg, "utf8"), "commit message", findings);
 } else if (mode === "--staged") {
   for (const f of git(["diff", "--cached", "--name-only", "--diff-filter=ACM"]).split("\n").filter(Boolean)) {
@@ -104,7 +108,7 @@ if (mode === "--message") {
   scan(git(["log", "--format=%B%n%an <%ae>", arg]), "commit messages", findings);
   scan(git(["rev-parse", "--abbrev-ref", "HEAD"]), "branch name", findings);
 } else {
-  console.error("usage: check-internal-refs.mjs --staged | --range A..B | --message FILE");
+  console.error("usage: check-internal-refs.mjs --staged | --range A..B | --message FILE | --text ENVVAR");
   process.exit(2);
 }
 
