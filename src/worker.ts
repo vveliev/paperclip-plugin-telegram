@@ -54,7 +54,8 @@ import {
   isInteractionReplyMapping,
 } from "./interaction-answers.js";
 import { isDecisionsMoreCallback, resolveDecisionsMoreCallback } from "./decisions.js";
-import { AGENT_ERROR_DEDUPLICATION_WINDOW_MS, DEFAULT_CONFIG, METRIC_NAMES } from "./constants.js";
+import { AGENT_ERROR_DEDUPLICATION_WINDOW_MS, METRIC_NAMES } from "./constants.js";
+import { decode as decodeTelegramConfig, type TelegramConfig } from "./config.js";
 import { EscalationManager } from "./escalation.js";
 import type { EscalationEvent } from "./escalation.js";
 import { isTelegramUpdateAllowed, validateTelegramAllowlists } from "./allowlist.js";
@@ -64,52 +65,6 @@ import { isWorking } from "./agent-status.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { resolveTelegramBotToken, type TelegramRuntimeHealth } from "./runtime-token.js";
 import { str } from "./coerce.js";
-
-type TelegramConfig = {
-  telegramBotTokenRef: string;
-  defaultChatId: string;
-  approvalsChatId: string;
-  approvalsTopicId: string;
-  errorsChatId: string;
-  errorsTopicId: string;
-  activityChatId: string;
-  activityTopicId: string;
-  digestChatId: string;
-  digestTopicId: string;
-  paperclipBaseUrl: string;
-  paperclipBoardApiTokenRef: string;
-  paperclipPublicUrl: string;
-  notifyOnIssueCreated: boolean;
-  notifyOnIssueDone: boolean;
-  notifyOnIssueAssigned: boolean;
-  onlyNotifyIfAssignedTo: string;
-  notifyOnApprovalCreated: boolean;
-  onlyNotifyBoardApprovals: boolean;
-  notifyOnAgentError: boolean;
-  notifyOnAgentRunStarted: boolean;
-  notifyOnAgentRunFinished: boolean;
-  enableCommands: boolean;
-  enableInbound: boolean;
-  allowedTelegramUserIds: string[];
-  allowedTelegramChatIds: string[];
-  digestMode: "off" | "daily" | "bidaily" | "tridaily";
-  dailyDigestTime: string;
-  bidailySecondTime: string;
-  tridailyTimes: string;
-  topicRouting: boolean;
-  maxAgentsPerThread: number;
-  escalationChatId: string;
-  escalationTimeoutMs: number;
-  escalationDefaultAction: "defer" | "auto_reply" | "close";
-  escalationHoldMessage: string;
-  // Phase 3: Media Pipeline
-  briefAgentId: string;
-  briefAgentChatIds: string[];
-  transcriptionApiKeyRef: string;
-  // Phase 5: Proactive Suggestions
-  maxSuggestionsPerHourPerCompany: number;
-  watchDeduplicationWindowMs: number;
-};
 
 type TelegramUpdate = {
   update_id: number;
@@ -669,10 +624,7 @@ async function bootstrapRuntime(
 ): Promise<TelegramRuntime | null> {
   if (!claimOwnership(ctx, companyId, rawConfig)) return runtime;
 
-  const config = {
-    ...DEFAULT_CONFIG,
-    ...(isRecord(rawConfig) ? rawConfig : {}),
-  } as TelegramConfig;
+  const config = decodeTelegramConfig(rawConfig);
   const baseUrl = config.paperclipBaseUrl || "http://localhost:3100";
   const publicUrl = config.paperclipPublicUrl || baseUrl;
 
@@ -1138,14 +1090,17 @@ export const plugin = definePlugin({
       const rt = ensureRuntime();
       if (!rt) return;
 
+      // Legacy dailyDigestEnabled configs are folded into digestMode by
+      // decode() in config.ts, so resolveDigestMode's own fallback is a
+      // no-op here; kept for consistency with digestTimesForConfig below.
       const effectiveDigestMode = resolveDigestMode(rt.config);
       if (effectiveDigestMode === "off") return;
 
       // Decisions key off the job's own scheduledAt, not the wall clock — a
       // late-running scheduler tick must still match the slot it was meant
       // for, and this is what makes the job testable against a controlled
-      // clock instead of real time (BLA-218: this exact job once no-oped
-      // silently because nothing checked what it actually ran against).
+      // clock instead of real time (this exact job once no-oped silently
+      // because nothing checked what it actually ran against).
       const scheduledAt = job.scheduledAt ? new Date(job.scheduledAt) : new Date();
       const manualRun = job.trigger === "manual";
       const digestSlot = resolveDigestSlot(rt.config, scheduledAt);
@@ -1561,8 +1516,8 @@ export async function handleUpdate(
   const chatId = String(msg.chat.id);
   const threadId = msg.message_thread_id;
 
-  // Prep for future localization (BLA-364): record the client's language tag
-  // per chat/user. Not read anywhere yet — no copy should branch on this.
+  // Prep for future localization: record the client's language tag per
+  // chat/user. Not read anywhere yet — no copy should branch on this.
   if (msg.from?.language_code) {
     await ctx.state.set(
       { scopeKind: "instance", stateKey: `lang_${chatId}_${msg.from.id}` },
@@ -1690,7 +1645,7 @@ export async function handleUpdate(
       }
     } else if (isInteractionReplyMapping(mapping)) {
       // Replying to a confirmation prompt is the reason text for rejecting
-      // it — the button-less half of the accept/reject flow (BLA-154). See
+      // it — the button-less half of the accept/reject flow. See
       // interaction-answers.ts for why rejection, not acceptance, needs this.
       const boardApiToken = await resolveBoardApiToken(ctx, config, mapping.companyId);
       await finalizeReplyRejection(ctx, token, baseUrl, boardApiToken, mapping, text, chatId);

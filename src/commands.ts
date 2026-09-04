@@ -1,6 +1,7 @@
 import type { PluginContext, PluginEvent, Agent, Issue, Project } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction, type ReplyKeyboardMarkup } from "./telegram-api.js";
-import { METRIC_NAMES, DEFAULT_CONFIG } from "./constants.js";
+import { METRIC_NAMES } from "./constants.js";
+import { DEFAULT_CONFIG } from "./config.js";
 import { countAgents } from "./agent-status.js";
 import { fetchAttention, sendAttentionList, describeDecisionsError, DEFAULT_DISPLAY_LIMIT, DECISIONS_PAGE_SIZE } from "./decisions.js";
 import { handleAcpCommand } from "./acp-bridge.js";
@@ -693,8 +694,8 @@ const PERSISTENT_KEYBOARD: ReplyKeyboardMarkup = {
 };
 
 /**
- * /keyboard on|off — opt-in persistent reply keyboard prototype (BLA-397,
- * see the reply-keyboard-experiment-eval doc on BLA-367 for rationale).
+ * /keyboard on|off — opt-in persistent reply keyboard prototype;
+ * see the reply-keyboard-experiment-eval doc for rationale.
  *
  * Reply keyboards are chat-level, not per-user, so showing one in a group
  * would impose it on everyone in that chat regardless of their own
