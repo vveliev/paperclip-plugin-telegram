@@ -63,6 +63,7 @@ import { shouldNotifyApproval } from "./approval-routing.js";
 import { isWorking } from "./agent-status.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { resolveTelegramBotToken, type TelegramRuntimeHealth } from "./runtime-token.js";
+import { lookupCompanyLink } from "./company-link.js";
 import { str } from "./coerce.js";
 
 type TelegramConfig = {
@@ -429,31 +430,6 @@ export async function resolveDigestThreadId(
   const configured = parseTopicId(configuredTopicId);
   if (configured) return configured;
   return await isForum(ctx, token, chatId) ? GENERAL_TOPIC_THREAD_ID : undefined;
-}
-
-async function resolveCompanyId(ctx: PluginContext, chatId: string): Promise<string> {
-  const mapping = await ctx.state.get({
-    scopeKind: "instance",
-    stateKey: `chat_${chatId}`,
-  }) as { companyId?: string; companyName?: string } | null;
-  const companyId = mapping?.companyId ?? mapping?.companyName;
-  if (!companyId) {
-    throw new Error("This chat is not linked to a Paperclip company. Use /connect first.");
-  }
-  return companyId;
-}
-
-// Non-throwing variant for handleUpdate call sites. A throw escaping
-// handleUpdate prevents the polling offset from advancing, so the same
-// update is re-fetched and re-thrown forever — the poller wedges for every
-// chat. Unlinked chats must degrade per-path instead (friendly reply for
-// commands, skip for media/thread routing).
-async function resolveCompanyIdOrNull(ctx: PluginContext, chatId: string): Promise<string | null> {
-  try {
-    return await resolveCompanyId(ctx, chatId);
-  } catch {
-    return null;
-  }
 }
 
 /** Deterministic enough to compare two deliveries for the equal-config rule below. */
@@ -1516,14 +1492,14 @@ export async function handleUpdate(
   // Phase 3: Handle media messages
   const hasMedia = !!(msg.voice || msg.audio || msg.video_note || msg.document || msg.photo);
   if (hasMedia) {
-    const companyId = await resolveCompanyIdOrNull(ctx, chatId);
-    if (companyId) {
+    const link = await lookupCompanyLink(ctx, chatId);
+    if (link.linked) {
       const handled = await handleMediaMessage(ctx, token, msg, {
         briefAgentId: config.briefAgentId ?? "",
         briefAgentChatIds: config.briefAgentChatIds ?? [],
         transcriptionApiKeyRef: config.transcriptionApiKeyRef ?? "",
         publicUrl,
-      }, companyId);
+      }, link.companyId);
       if (handled) return;
     } else {
       ctx.logger.debug("Ignoring media message from unlinked chat", { chatId });
@@ -1538,10 +1514,10 @@ export async function handleUpdate(
   if (threadId) {
     const isCommand = text.startsWith("/");
     if (!isCommand) {
-      const companyId = await resolveCompanyIdOrNull(ctx, chatId);
-      if (companyId) {
+      const link = await lookupCompanyLink(ctx, chatId);
+      if (link.linked) {
         const replyToId = msg.reply_to_message?.message_id;
-        const routed = await routeMessageToAgent(ctx, token, chatId, threadId, text, replyToId, companyId);
+        const routed = await routeMessageToAgent(ctx, token, chatId, threadId, text, replyToId, link.companyId);
         if (routed) return;
       } else {
         ctx.logger.debug("Not routing thread message from unlinked chat", { chatId });
@@ -1556,7 +1532,8 @@ export async function handleUpdate(
     const args = text.slice(botCommand.offset + botCommand.length).trim();
     // undefined on unlinked chats: /connect and /help still work, and the
     // company-scoped handlers answer with their "not linked" guidance.
-    const companyId = (await resolveCompanyIdOrNull(ctx, chatId)) ?? undefined;
+    const chatLink = await lookupCompanyLink(ctx, chatId);
+    const companyId = chatLink.linked ? chatLink.companyId : undefined;
 
     // Phase 4: Check custom commands first
     if (command === "commands") {
