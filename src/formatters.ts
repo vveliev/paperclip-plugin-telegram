@@ -3,6 +3,7 @@ import { escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import type { SendMessageOptions } from "./telegram-api.js";
 import { str } from "./coerce.js";
 import { AGENT_ERROR_TRUNCATE_LENGTH, TRUNCATE_SHORT, TRUNCATE_MEDIUM } from "./constants.js";
+import { isExternalUrl } from "./url-utils.js";
 
 // --- Telegram message formatting convention (GIF-42) ---
 //
@@ -66,10 +67,6 @@ function code(s: string): string {
 }
 
 export type IssueLinksOpts = { baseUrl?: string; issuePrefix?: string };
-
-function isExternalUrl(url?: string): boolean {
-  return !!url && url.startsWith("https://");
-}
 
 function issueLink(identifier: string, opts?: IssueLinksOpts): string {
   if (opts?.baseUrl && opts?.issuePrefix) {

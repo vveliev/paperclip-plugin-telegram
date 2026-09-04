@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import {
   definePlugin,
   runWorker,
@@ -26,7 +25,7 @@ import {
   formatAgentRunFinished,
   type IssueLinksOpts,
 } from "./formatters.js";
-import { handleCommand, resolveNotificationThreadId, BOT_COMMANDS } from "./commands.js";
+import { handleCommand, resolveNotificationThreadId, BOT_COMMANDS, BOARD_TOKEN_COMMAND_NAMES } from "./commands.js";
 import {
   routeMessageToAgent,
   handleHandoffToolCall,
@@ -146,10 +145,6 @@ type TelegramUpdate = {
     data?: string;
   };
 };
-
-// Module initialization runs before the SDK enters any host invocation.
-const runOutsideInvocation = AsyncLocalStorage.snapshot();
-const deliveredCompanyIds = new Set<string>();
 
 const TELEGRAM_API = "https://api.telegram.org";
 const BOARD_ACCESS_SCOPE = {
@@ -276,12 +271,12 @@ function getBoardAccessRegistration(
  * board token resolved before the handler runs. Without it the request goes out
  * unauthenticated and the user sees a bare 403 with no explanation.
  *
- * Keep this in step with the handlers that take a `boardApiToken` argument.
- * It is a list rather than "always resolve" because resolving a secret on every
- * /help would be wasteful — the cost of that optimisation is this coupling, so
- * it is asserted in tests.
+ * Derived from commands.ts's command table (the `needsBoardToken` field) so it
+ * can't drift from the handlers that actually take a `boardApiToken` argument.
+ * It is on-demand rather than "always resolve" because resolving a secret on
+ * every /help would be wasteful.
  */
-export const BOARD_TOKEN_COMMANDS = new Set(["approve", "decisions"]);
+export const BOARD_TOKEN_COMMANDS = BOARD_TOKEN_COMMAND_NAMES;
 
 export async function resolveBoardApiToken(
   ctx: PluginContext,
@@ -720,9 +715,7 @@ async function bootstrapRuntime(
 
   if (!pollingActive) {
     pollingActive = true;
-    // Capture at module load, not here: this callback belongs to a short-lived
-    // host invocation. The polling descendants must make proactive RPC calls.
-    runOutsideInvocation(() => pollUpdates(ctx)).catch((err) =>
+    pollUpdates(ctx).catch((err) =>
       ctx.logger.error("Polling loop crashed", { error: String(err) }),
     );
   }
@@ -1505,9 +1498,6 @@ export const plugin = definePlugin({
         return;
       }
 
-      // Discovery comes only from verified host deliveries. Keep routing for
-      // other companies even when they do not own the shared bot config.
-      deliveredCompanyIds.add(companyId);
       try {
         await bootstrapRuntime(ctx, companyId, newConfig);
       } catch (err) {
@@ -1637,14 +1627,18 @@ export async function handleUpdate(
     if (handledCustom) return;
 
     // Built-in commands
-    const boardApiToken = BOARD_TOKEN_COMMANDS.has(command)
+    const boardApiToken = BOARD_TOKEN_COMMAND_NAMES.has(command)
       ? await resolveBoardApiToken(ctx, config, companyId)
       : undefined;
-    await handleCommand(
-      ctx, token, chatId, command, args, threadId, baseUrl, publicUrl, companyId, boardApiToken,
-      config.maxAgentsPerThread,
+    await handleCommand(ctx, token, chatId, command, args, {
+      messageThreadId: threadId,
+      baseUrl,
+      publicUrl,
+      companyId,
+      boardApiToken,
+      maxAgentsPerThread: config.maxAgentsPerThread,
       connectCompanyIds,
-      {
+      settingsConfig: {
         topicRouting: config.topicRouting,
         notifyOnIssueCreated: config.notifyOnIssueCreated,
         notifyOnIssueDone: config.notifyOnIssueDone,
@@ -1654,8 +1648,8 @@ export async function handleUpdate(
         notifyOnAgentRunStarted: config.notifyOnAgentRunStarted,
         notifyOnAgentRunFinished: config.notifyOnAgentRunFinished,
       },
-      msg.chat.type,
-    );
+      chatType: msg.chat.type,
+    });
     return;
   }
 
