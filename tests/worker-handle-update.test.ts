@@ -174,12 +174,12 @@ describe("handleUpdate - command dispatch", () => {
     await handleUpdate(ctx, "token", config, update, baseUrl);
 
     expect(handleCommandCalls).toHaveLength(1);
-    const [, , chatIdArg, commandArg, , , , , companyIdArg] = handleCommandCalls[0] as [
-      unknown, string, string, string, string, number | undefined, string, string, string,
+    const [, , chatIdArg, commandArg, , opts] = handleCommandCalls[0] as [
+      unknown, string, string, string, string, { companyId?: string },
     ];
     expect(chatIdArg).toBe(String(LINKED_CHAT_ID));
     expect(commandArg).toBe("status");
-    expect(companyIdArg).toBe(COMPANY_ID);
+    expect(opts.companyId).toBe(COMPANY_ID);
   });
 
   it("gives custom commands precedence over built-in commands", async () => {
@@ -220,7 +220,8 @@ describe("handleUpdate - command dispatch", () => {
 
     expect(handleCommandCalls).toHaveLength(1);
     const call = handleCommandCalls[0];
-    expect(call[call.length - 1]).toBe("private");
+    const opts = call[call.length - 1] as { chatType?: string };
+    expect(opts.chatType).toBe("private");
   });
 
   it("does not dispatch commands when enableCommands is false", async () => {

@@ -2,6 +2,7 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, escapeMarkdownV2, sendChatAction, answerCallbackQuery, editMessage } from "./telegram-api.js";
 import { METRIC_NAMES } from "./constants.js";
 import { validateCommandDefinition } from "./command-definition-validation.js";
+import { BUILTIN_COMMAND_NAMES } from "./commands.js";
 
 // --- Types ---
 
@@ -118,20 +119,6 @@ function approvalStateKey(approvalId: string): string {
   return `cmd_approval_${approvalId}`;
 }
 
-// --- Built-in commands ---
-
-// Every name `handleCommand` (commands.ts) dispatches on, plus "commands"
-// itself (handled in worker.ts before this set is even consulted). Drift
-// between this set and the dispatcher is exactly the bug GIF-149 fixed: a
-// name dispatchable but missing here can be imported as a custom command and
-// permanently shadow the real handler. tests/command-registry.test.ts
-// enforces this set stays in sync with the switch in commands.ts.
-export const BUILTIN_COMMANDS = new Set([
-  "create", "decisions", "status", "issues", "agents", "approve",
-  "start", "help", "settings", "keyboard", "connect", "connect_topic",
-  "topics", "acp", "commands",
-]);
-
 // --- Command registry ---
 
 export async function handleCommandsCommand(
@@ -152,17 +139,20 @@ export async function handleCommandsCommand(
   }
 
   switch (subcommand) {
+    // companyId is non-null here: the guard above already returned for these
+    // four subcommands when it isn't. TS can't follow that through the
+    // array .includes() check, so it's asserted rather than re-checked.
     case "list":
-      await listCommands(ctx, token, chatId, messageThreadId, companyId);
+      await listCommands(ctx, token, chatId, messageThreadId, companyId!);
       break;
     case "import":
-      await importCommand(ctx, token, chatId, parts.slice(1).join(" "), messageThreadId, companyId);
+      await importCommand(ctx, token, chatId, parts.slice(1).join(" "), messageThreadId, companyId!);
       break;
     case "delete":
-      await deleteCommand(ctx, token, chatId, parts[1] ?? "", messageThreadId, companyId);
+      await deleteCommand(ctx, token, chatId, parts[1] ?? "", messageThreadId, companyId!);
       break;
     case "run":
-      await runCommand(ctx, token, chatId, parts[1] ?? "", parts.slice(2), messageThreadId, companyId);
+      await runCommand(ctx, token, chatId, parts[1] ?? "", parts.slice(2), messageThreadId, companyId!);
       break;
     default:
       await sendMessage(ctx, token, chatId, [
@@ -186,7 +176,7 @@ export async function tryCustomCommand(
   messageThreadId?: number,
   companyId?: string,
 ): Promise<boolean> {
-  if (BUILTIN_COMMANDS.has(command)) return false;
+  if (BUILTIN_COMMAND_NAMES.has(command)) return false;
 
   // Unlinked chat: never fall back to chatId as a companyId. Returning false
   // lets the built-in command path answer with its "not linked" guidance.
@@ -206,11 +196,10 @@ async function listCommands(
   ctx: PluginContext,
   token: string,
   chatId: string,
-  messageThreadId?: number,
-  companyId?: string,
+  messageThreadId: number | undefined,
+  companyId: string,
 ): Promise<void> {
-  const resolvedCompanyId = companyId ?? chatId;
-  const commands = await getCommandRegistry(ctx, resolvedCompanyId);
+  const commands = await getCommandRegistry(ctx, companyId);
 
   if (commands.length === 0) {
     // plain: static status text, no formatting need
@@ -239,8 +228,8 @@ async function importCommand(
   token: string,
   chatId: string,
   jsonStr: string,
-  messageThreadId?: number,
-  companyId?: string,
+  messageThreadId: number | undefined,
+  companyId: string,
 ): Promise<void> {
   if (!jsonStr.trim()) {
     // plain: static usage text, no formatting need
@@ -265,14 +254,13 @@ async function importCommand(
   }
   const definition = validation.definition;
 
-  if (BUILTIN_COMMANDS.has(definition.name)) {
+  if (BUILTIN_COMMAND_NAMES.has(definition.name)) {
     // plain: interpolates the user-supplied command name from the definition
     await sendMessage(ctx, token, chatId, `Cannot override built-in command: /${definition.name}`, { parseMode: undefined, messageThreadId });
     return;
   }
 
-  const resolvedCompanyId = companyId ?? chatId;
-  const commands = await getCommandRegistry(ctx, resolvedCompanyId);
+  const commands = await getCommandRegistry(ctx, companyId);
 
   // Replace existing or add new
   const existingIdx = commands.findIndex((c) => c.name === definition.name);
@@ -290,7 +278,7 @@ async function importCommand(
     commands.push(newCmd);
   }
 
-  await saveCommandRegistry(ctx, resolvedCompanyId, commands);
+  await saveCommandRegistry(ctx, companyId, commands);
 
   await sendMessage(
     ctx,
@@ -306,8 +294,8 @@ async function deleteCommand(
   token: string,
   chatId: string,
   name: string,
-  messageThreadId?: number,
-  companyId?: string,
+  messageThreadId: number | undefined,
+  companyId: string,
 ): Promise<void> {
   if (!name.trim()) {
     // plain: static usage text, no formatting need
@@ -315,8 +303,7 @@ async function deleteCommand(
     return;
   }
 
-  const resolvedCompanyId = companyId ?? chatId;
-  const commands = await getCommandRegistry(ctx, resolvedCompanyId);
+  const commands = await getCommandRegistry(ctx, companyId);
   const filtered = commands.filter((c) => c.name !== name);
 
   if (filtered.length === commands.length) {
@@ -325,7 +312,7 @@ async function deleteCommand(
     return;
   }
 
-  await saveCommandRegistry(ctx, resolvedCompanyId, filtered);
+  await saveCommandRegistry(ctx, companyId, filtered);
 
   await sendMessage(
     ctx,
@@ -342,11 +329,10 @@ async function runCommand(
   chatId: string,
   name: string,
   args: string[],
-  messageThreadId?: number,
-  companyId?: string,
+  messageThreadId: number | undefined,
+  companyId: string,
 ): Promise<void> {
-  const resolvedCompanyId = companyId ?? chatId;
-  const commands = await getCommandRegistry(ctx, resolvedCompanyId);
+  const commands = await getCommandRegistry(ctx, companyId);
   const cmd = commands.find((c) => c.name === name);
 
   if (!cmd) {
@@ -355,7 +341,7 @@ async function runCommand(
     return;
   }
 
-  await executeWorkflow(ctx, token, chatId, cmd, args, messageThreadId, resolvedCompanyId);
+  await executeWorkflow(ctx, token, chatId, cmd, args, messageThreadId, companyId);
 }
 
 // --- Workflow executor ---

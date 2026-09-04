@@ -38,19 +38,19 @@ describe("/status agent counts", () => {
     // so the previous `status === "active"` filter reported 0 while agents were
     // working.
     const ctx = makeCtx([agent("running"), agent("idle"), agent("idle")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     expect(sent.at(-1)).toContain("1* running");
   });
 
   it("still counts an 'active' status as running, in case a host emits it", async () => {
     const ctx = makeCtx([agent("active"), agent("idle")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     expect(sent.at(-1)).toContain("1* running");
   });
 
   it("reports availability separately from running, and flags paused/error", async () => {
     const ctx = makeCtx([agent("running"), agent("idle"), agent("paused"), agent("error")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     const text = sent.at(-1)!;
     expect(text).toContain("1* running");
     expect(text).toContain("2* available");
@@ -65,7 +65,7 @@ describe("/status agent counts", () => {
       agent("terminated"),
       agent("pending_approval"),
     ]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     const text = sent.at(-1)!;
     expect(text).toContain("1* running");
     expect(text).toContain("2* available");
@@ -75,13 +75,13 @@ describe("/status agent counts", () => {
 
   it("counts availability positively, so an unknown future status is not available", async () => {
     const ctx = makeCtx([agent("idle"), agent("some_new_status_from_a_later_sdk")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     expect(sent.at(-1)).toContain("1* available");
   });
 
   it("omits the paused/error note when everything is healthy", async () => {
     const ctx = makeCtx([agent("idle"), agent("idle")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     expect(sent.at(-1)).not.toContain("paused/error");
   });
 
@@ -90,7 +90,7 @@ describe("/status agent counts", () => {
     // status this file does not filter on as available — "terminated" being the
     // clearest case: the agent still exists in the list, but will never run again.
     const ctx = makeCtx([agent("running"), agent("idle"), agent("terminated")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     const text = sent.at(-1)!;
     expect(text).toContain("1* running");
     expect(text).toContain("2* available");
@@ -98,7 +98,7 @@ describe("/status agent counts", () => {
 
   it("does not count a pending_approval agent as available", async () => {
     const ctx = makeCtx([agent("running"), agent("pending_approval")]);
-    await handleCommand(ctx, "tok", "chat-1", "status", "", undefined, undefined, undefined, "company-1");
+    await handleCommand(ctx, "tok", "chat-1", "status", "", { companyId: "company-1" });
     const text = sent.at(-1)!;
     expect(text).toContain("1* running");
     expect(text).toContain("1* available");

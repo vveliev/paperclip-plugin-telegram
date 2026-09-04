@@ -25,7 +25,7 @@ import {
   formatAgentRunFinished,
   type IssueLinksOpts,
 } from "./formatters.js";
-import { handleCommand, resolveNotificationThreadId, BOT_COMMANDS } from "./commands.js";
+import { handleCommand, resolveNotificationThreadId, BOT_COMMANDS, BOARD_TOKEN_COMMAND_NAMES } from "./commands.js";
 import {
   routeMessageToAgent,
   handleHandoffToolCall,
@@ -271,12 +271,12 @@ function getBoardAccessRegistration(
  * board token resolved before the handler runs. Without it the request goes out
  * unauthenticated and the user sees a bare 403 with no explanation.
  *
- * Keep this in step with the handlers that take a `boardApiToken` argument.
- * It is a list rather than "always resolve" because resolving a secret on every
- * /help would be wasteful — the cost of that optimisation is this coupling, so
- * it is asserted in tests.
+ * Derived from commands.ts's command table (the `needsBoardToken` field) so it
+ * can't drift from the handlers that actually take a `boardApiToken` argument.
+ * It is on-demand rather than "always resolve" because resolving a secret on
+ * every /help would be wasteful.
  */
-export const BOARD_TOKEN_COMMANDS = new Set(["approve", "decisions"]);
+export const BOARD_TOKEN_COMMANDS = BOARD_TOKEN_COMMAND_NAMES;
 
 export async function resolveBoardApiToken(
   ctx: PluginContext,
@@ -1568,13 +1568,17 @@ export async function handleUpdate(
     if (handledCustom) return;
 
     // Built-in commands
-    const boardApiToken = BOARD_TOKEN_COMMANDS.has(command)
+    const boardApiToken = BOARD_TOKEN_COMMAND_NAMES.has(command)
       ? await resolveBoardApiToken(ctx, config, companyId)
       : undefined;
-    await handleCommand(
-      ctx, token, chatId, command, args, threadId, baseUrl, publicUrl, companyId, boardApiToken,
-      config.maxAgentsPerThread,
-      {
+    await handleCommand(ctx, token, chatId, command, args, {
+      messageThreadId: threadId,
+      baseUrl,
+      publicUrl,
+      companyId,
+      boardApiToken,
+      maxAgentsPerThread: config.maxAgentsPerThread,
+      settingsConfig: {
         topicRouting: config.topicRouting,
         notifyOnIssueCreated: config.notifyOnIssueCreated,
         notifyOnIssueDone: config.notifyOnIssueDone,
@@ -1584,8 +1588,8 @@ export async function handleUpdate(
         notifyOnAgentRunStarted: config.notifyOnAgentRunStarted,
         notifyOnAgentRunFinished: config.notifyOnAgentRunFinished,
       },
-      msg.chat.type,
-    );
+      chatType: msg.chat.type,
+    });
     return;
   }
 

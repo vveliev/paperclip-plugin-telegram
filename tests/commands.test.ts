@@ -124,7 +124,7 @@ describe("handleCommand", () => {
 
   it("uses a resolved company id for group chat commands", async () => {
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "-1003800613668", "status", "", undefined, undefined, undefined, "co-1");
+    await handleCommand(ctx, "token", "-1003800613668", "status", "", { companyId: "co-1" });
     expect(ctx.agents.list).toHaveBeenCalledWith({ companyId: "co-1" });
     expect(ctx.agents.list).not.toHaveBeenCalledWith({ companyId: "-1003800613668" });
     expect(sentMessages[0].text).toContain("Paperclip Status");
@@ -149,7 +149,7 @@ describe("handleCommand", () => {
   it("routes /decisions with no arg to a default-sized attention fetch", async () => {
     stateStore["chat_123"] = { companyId: "co-1" };
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "123", "decisions", "", undefined, "http://example.com");
+    await handleCommand(ctx, "token", "123", "decisions", "", { baseUrl: "http://example.com" });
     expect(ctx.http.fetch).toHaveBeenCalledWith(
       `http://example.com/api/companies/co-1/attention?limit=${DEFAULT_DISPLAY_LIMIT}`,
       expect.any(Object),
@@ -159,7 +159,7 @@ describe("handleCommand", () => {
   it("routes /decisions with a numeric arg to a widened attention fetch (BLA-622)", async () => {
     stateStore["chat_123"] = { companyId: "co-1" };
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "123", "decisions", "20", undefined, "http://example.com");
+    await handleCommand(ctx, "token", "123", "decisions", "20", { baseUrl: "http://example.com" });
     expect(ctx.http.fetch).toHaveBeenCalledWith(
       "http://example.com/api/companies/co-1/attention?limit=20",
       expect.any(Object),
@@ -174,7 +174,7 @@ describe("handleCommand", () => {
 
   it("routes /approve with id calls API with configurable base URL", async () => {
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "123", "approve", "apr-1", undefined, "http://example.com");
+    await handleCommand(ctx, "token", "123", "approve", "apr-1", { baseUrl: "http://example.com" });
     expect(ctx.http.fetch).toHaveBeenCalledWith(
       "http://example.com/api/approvals/apr-1/approve",
       expect.any(Object),
@@ -189,7 +189,7 @@ describe("handleCommand", () => {
 
   it("passes messageThreadId for forum topics", async () => {
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "123", "help", "", 42);
+    await handleCommand(ctx, "token", "123", "help", "", { messageThreadId: 42 });
     expect(sentMessages[0].options).toMatchObject({ messageThreadId: 42 });
   });
 
@@ -316,7 +316,7 @@ describe("handleCommand", () => {
       update: vi.fn().mockResolvedValue({ ...createdIssue, status: "todo", assigneeAgentId: "ceo-1" }),
     };
 
-    await handleCommand(ctx, "token", "123", "create", "Topic scoped task", 58);
+    await handleCommand(ctx, "token", "123", "create", "Topic scoped task", { messageThreadId: 58 });
 
     expect(ctx.issues.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -620,15 +620,18 @@ describe("/settings", () => {
 
   it("reflects the company's resolved notification config, not just defaults", async () => {
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "123", "settings", "", undefined, undefined, undefined, "co-1", undefined, undefined, {
-      topicRouting: true,
-      notifyOnIssueCreated: false,
-      notifyOnIssueDone: true,
-      notifyOnIssueAssigned: true,
-      notifyOnApprovalCreated: false,
-      notifyOnAgentError: true,
-      notifyOnAgentRunStarted: false,
-      notifyOnAgentRunFinished: false,
+    await handleCommand(ctx, "token", "123", "settings", "", {
+      companyId: "co-1",
+      settingsConfig: {
+        topicRouting: true,
+        notifyOnIssueCreated: false,
+        notifyOnIssueDone: true,
+        notifyOnIssueAssigned: true,
+        notifyOnApprovalCreated: false,
+        notifyOnAgentError: true,
+        notifyOnAgentRunStarted: false,
+        notifyOnAgentRunFinished: false,
+      },
     });
 
     const text = sentMessages[0].text;
@@ -645,16 +648,14 @@ describe("/settings", () => {
 
   it("passes messageThreadId through", async () => {
     const ctx = mockCtx();
-    await handleCommand(ctx, "token", "123", "settings", "", 42);
+    await handleCommand(ctx, "token", "123", "settings", "", { messageThreadId: 42 });
     expect(sentMessages[0].options).toMatchObject({ messageThreadId: 42 });
   });
 });
 
 describe("/keyboard", () => {
-  // handleCommand's chatType param sits after settingsConfig; earlier
-  // positional args are irrelevant to /keyboard so they're left undefined.
   const call = (chatId: string, args: string, chatType: string | undefined) =>
-    handleCommand(mockCtx(), "token", chatId, "keyboard", args, undefined, undefined, undefined, undefined, undefined, undefined, undefined, chatType);
+    handleCommand(mockCtx(), "token", chatId, "keyboard", args, { chatType });
 
   it("sends a persistent keyboard on 'on' in a private chat", async () => {
     await call("123", "on", "private");
@@ -794,18 +795,8 @@ describe("BOT_COMMANDS", () => {
   });
 });
 
-describe("HELP_GROUPS", () => {
-  it("covers every BOT_COMMANDS entry exactly once", () => {
-    // Each group entry's usage starts with the bare command, e.g.
-    // "/acp <spawn|status|cancel|close>" -> "acp". Extracted this way so the
-    // grouped /help copy can't silently drift from the command set that
-    // actually gets registered with Telegram.
-    const groupedCommands = HELP_GROUPS.flatMap((group) =>
-      group.entries.map((entry) => entry.usage.slice(1).split(/[\s<]/)[0]),
-    );
-    const botCommandNames = BOT_COMMANDS.map((c) => c.command);
-
-    expect(groupedCommands.sort()).toEqual([...botCommandNames].sort());
-    expect(new Set(groupedCommands).size).toBe(groupedCommands.length);
-  });
-});
+// A "HELP_GROUPS covers every BOT_COMMANDS entry exactly once" drift-guard
+// test used to live here. It's gone because it's now structurally impossible
+// to fail: both are derived from the same COMMANDS table in commands.ts
+// rather than hand-maintained separately, so there is nothing left for it to
+// catch (GIF-159).
