@@ -124,26 +124,44 @@ kept as a record of what the state was immediately after the rebase.*
   cannot rot away unnoticed a second time. `worker.ts` went 62.71% → 76.33%
   statements; overall 83.51% → 86.27%.
 
-### Still open: daily-digest behaviour
+### Closed: daily-digest behaviour (step 03)
 
-The digest note above ("the finer-grained slot helpers were dropped along
-with the architecture that needed them") is accurate about *why* they went,
-but understates what their loss costs. Upstream's inlined replacement reads
-the **wall clock** rather than the job's `scheduledAt`, so relative to the
-extracted helpers the digest job:
+*Updated 2026-09-04.* The gap described below is closed. `telegram-daily-digest`,
+`check-escalation-timeouts`, and `check-watches` now all accept the job
+context the host was already passing them (`job.scheduledAt`, `job.trigger`)
+instead of declaring no parameters and reading the wall clock — the exact
+shape of the BLA-218 outage this note opened with, where a job ran, logged
+success, and silently did nothing relative to what it was actually asked to
+do.
 
-- ignores `trigger: "manual"` — there is no way to send a digest on demand;
-- fires anywhere in the first 5 minutes of a matching hour rather than at the
-  configured slot;
-- keeps no `digest_sent_<date>_<slot>` marker, so two runs inside that
-  5-minute window both send.
+`resolveDigestMode` / `parseDigestTime` / `digestTimesForConfig` /
+`resolveDigestSlot` were ported back into `worker.ts` (adapted for the
+single-owner runtime, not restored verbatim from
+`origin/prerelease-pre-rebase-backup` `c36e532`). The digest job now:
 
-Six tests covering these guarantees are **quarantined as `describe.skip`** in
-`tests/worker-setup.test.ts` rather than deleted, because the requirements are
-real and the fix is a `worker.ts` change, not a test change. Two of them were
-passing vacuously against the current implementation — they assert zero sends
-and can never fail as written. The working implementation is recoverable from
-`origin/prerelease-pre-rebase-backup` (`c36e532`).
+- keys slot matching off `job.scheduledAt`, not `new Date()`;
+- honors `trigger: "manual"` — a manual run sends immediately regardless of
+  slot, with no dedup marker;
+- writes a `digest_sent_<date>_<slot>` marker (scoped per company) after a
+  successful scheduled send, so a slot fires at most once.
+
+`check-escalation-timeouts` and `check-watches` now thread the job's
+`scheduledAt` through as `now` (`EscalationManager.checkTimeouts`'s new `now`
+parameter; `checkWatches`'s new `now` parameter, which also retimes the
+hourly rate-limit bucket key and the suggestion dedup window) instead of
+calling `Date.now()` internally, so both are testable against a controlled
+clock. Both parameters default to `Date.now()` when omitted, so this is
+additive — no existing caller broke.
+
+Five of the six quarantined tests in `tests/worker-setup.test.ts` were
+un-quarantined (`describe.skip` → `describe`) and pass unmodified against the
+new implementation. The sixth — "skips a company with digest mode off without
+affecting a sibling company" — was deleted rather than restored: it asserts
+per-company `digestMode`, which the single-owner runtime (one delivered
+config for the whole plugin) structurally cannot express. Restoring it would
+silently re-litigate that decision. Step 04's per-company runtimes make this
+expressible again; it should reintroduce per-company digest mode
+deliberately then, not inherit a pre-built test for it now.
 
 ## Where to look
 

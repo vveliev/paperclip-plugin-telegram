@@ -431,6 +431,58 @@ export async function resolveDigestThreadId(
   return await isForum(ctx, token, chatId) ? GENERAL_TOPIC_THREAD_ID : undefined;
 }
 
+export function resolveDigestMode(config: TelegramConfig): TelegramConfig["digestMode"] {
+  return (config as Record<string, unknown>).dailyDigestEnabled === true && config.digestMode === "off"
+    ? "daily"
+    : config.digestMode ?? "off";
+}
+
+export function parseDigestTime(value: string | undefined): { hour: number; minute: number } | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(trimmed);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = match[2] === undefined ? 0 : Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return { hour, minute };
+}
+
+export function digestTimesForConfig(config: TelegramConfig): Array<{ hour: number; minute: number }> {
+  const mode = resolveDigestMode(config);
+  if (mode === "off") return [];
+  if (mode === "daily") {
+    return [parseDigestTime(config.dailyDigestTime)].filter((time): time is { hour: number; minute: number } => Boolean(time));
+  }
+  if (mode === "bidaily") {
+    return [parseDigestTime(config.dailyDigestTime), parseDigestTime(config.bidailySecondTime)]
+      .filter((time): time is { hour: number; minute: number } => Boolean(time));
+  }
+  return (config.tridailyTimes || "07:00,13:00,19:00")
+    .split(",")
+    .map((time) => parseDigestTime(time))
+    .filter((time): time is { hour: number; minute: number } => Boolean(time));
+}
+
+/**
+ * Slot match keyed on the job's `scheduledAt`, not the wall clock — a
+ * scheduled run only sends once per configured hour:minute, and a manual
+ * run bypasses this entirely (see the `telegram-daily-digest` job).
+ */
+export function resolveDigestSlot(
+  config: TelegramConfig,
+  date: Date,
+): { dateKey: string; timeKey: string } | null {
+  const hour = date.getUTCHours();
+  const minute = date.getUTCMinutes();
+  const match = digestTimesForConfig(config).find((time) => time.hour === hour && time.minute === minute);
+  if (!match) return null;
+  const dateKey = date.toISOString().slice(0, 10);
+  const timeKey = `${String(match.hour).padStart(2, "0")}:${String(match.minute).padStart(2, "0")}`;
+  return { dateKey, timeKey };
+}
+
 async function resolveCompanyId(ctx: PluginContext, chatId: string): Promise<string> {
   const mapping = await ctx.state.get({
     scopeKind: "instance",
@@ -1082,45 +1134,41 @@ export const plugin = definePlugin({
 
     // --- Daily digest job ---
 
-    ctx.jobs.register("telegram-daily-digest", async () => {
+    ctx.jobs.register("telegram-daily-digest", async (job) => {
       const rt = ensureRuntime();
       if (!rt) return;
 
-      // Support legacy dailyDigestEnabled boolean
-      const effectiveDigestMode = (rt.config as Record<string, unknown>).dailyDigestEnabled === true && rt.config.digestMode === "off"
-        ? "daily"
-        : rt.config.digestMode ?? "off";
+      const effectiveDigestMode = resolveDigestMode(rt.config);
       if (effectiveDigestMode === "off") return;
 
-      // Check if current UTC hour matches a configured digest time
-      const nowHour = new Date().getUTCHours();
-      const nowMin = new Date().getUTCMinutes();
-      if (nowMin >= 5) return; // only fire within first 5 min of the hour
-
-      const parseHour = (t: string) => {
-        const [h] = (t || "").split(":");
-        return parseInt(h ?? "", 10);
-      };
-      const firstHour = parseHour(rt.config.dailyDigestTime);
-      const secondHour = parseHour(rt.config.bidailySecondTime);
-      const tridailyHours = (rt.config.tridailyTimes || "07:00,13:00,19:00")
-        .split(",")
-        .map((t) => parseHour(t.trim()));
-
-      let shouldSend = false;
-      if (effectiveDigestMode === "daily") {
-        shouldSend = nowHour === firstHour;
-      } else if (effectiveDigestMode === "bidaily") {
-        shouldSend = nowHour === firstHour || nowHour === secondHour;
-      } else if (effectiveDigestMode === "tridaily") {
-        shouldSend = tridailyHours.includes(nowHour);
-      }
-      if (!shouldSend) return;
+      // Decisions key off the job's own scheduledAt, not the wall clock — a
+      // late-running scheduler tick must still match the slot it was meant
+      // for, and this is what makes the job testable against a controlled
+      // clock instead of real time (BLA-218: this exact job once no-oped
+      // silently because nothing checked what it actually ran against).
+      const scheduledAt = job.scheduledAt ? new Date(job.scheduledAt) : new Date();
+      const manualRun = job.trigger === "manual";
+      const digestSlot = resolveDigestSlot(rt.config, scheduledAt);
+      if (!manualRun && !digestSlot) return;
 
       const companies = await ctx.companies.list();
       for (const company of companies) {
         const chatId = await resolveChat(ctx, company.id, rt.config.digestChatId || rt.config.defaultChatId);
         if (!chatId) continue;
+
+        // A manual run always sends, on demand, with no dedup marker. A
+        // scheduled run sends once per configured slot: check-and-skip
+        // before doing any work, mark sent only after a successful send.
+        let sentKey: string | null = null;
+        if (!manualRun && digestSlot) {
+          sentKey = `digest_sent_${digestSlot.dateKey}_${digestSlot.timeKey}`;
+          const alreadySent = await ctx.state.get({
+            scopeKind: "company",
+            scopeId: company.id,
+            stateKey: sentKey,
+          });
+          if (alreadySent) continue;
+        }
 
         try {
           const agents = await ctx.agents.list({ companyId: company.id });
@@ -1129,7 +1177,7 @@ export const plugin = definePlugin({
           const workingAgents = agents.filter(isWorking);
           const issues = await ctx.issues.list({ companyId: company.id, limit: 50 });
 
-          const now = Date.now();
+          const now = scheduledAt.getTime();
           const oneDayMs = 24 * 60 * 60 * 1000;
           const completedToday = issues.filter((i: Issue) =>
             i.status === "done" && i.completedAt && (now - new Date(i.completedAt).getTime()) < oneDayMs
@@ -1143,7 +1191,7 @@ export const plugin = definePlugin({
           const inReview = issues.filter((i: Issue) => i.status === "in_review");
           const blocked = issues.filter((i: Issue) => i.status === "blocked");
 
-          const dateStr = new Date().toISOString().split("T")[0];
+          const dateStr = scheduledAt.toISOString().split("T")[0];
           const companyLabel = company.name ? ` \\- ${escapeMarkdownV2(company.name)}` : "";
           const digestLabel = effectiveDigestMode === "bidaily" ? "Digest" : "Daily Digest";
           const lines = [
@@ -1190,6 +1238,13 @@ export const plugin = definePlugin({
             parseMode: "MarkdownV2",
             messageThreadId: digestThreadId,
           });
+
+          if (sentKey) {
+            await ctx.state.set(
+              { scopeKind: "company", scopeId: company.id, stateKey: sentKey },
+              { sentAt: new Date().toISOString(), jobRunId: job.runId },
+            );
+          }
         } catch (err) {
           ctx.logger.error("Daily digest failed for company", { companyId: company.id, error: String(err) });
           const text = [
@@ -1390,25 +1445,27 @@ export const plugin = definePlugin({
     });
 
     // --- Phase 1: Escalation timeout checker job ---
-    ctx.jobs.register("check-escalation-timeouts", async () => {
+    ctx.jobs.register("check-escalation-timeouts", async (job) => {
       const rt = ensureRuntime();
       if (!rt) return;
       try {
-        await escalationManager.checkTimeouts(ctx, rt.token);
+        const now = job.scheduledAt ? new Date(job.scheduledAt).getTime() : Date.now();
+        await escalationManager.checkTimeouts(ctx, rt.token, undefined, now);
       } catch (err) {
         ctx.logger.error("Escalation timeout check failed", { error: String(err) });
       }
     });
 
     // --- Phase 5: Watch checker job ---
-    ctx.jobs.register("check-watches", async () => {
+    ctx.jobs.register("check-watches", async (job) => {
       const rt = ensureRuntime();
       if (!rt) return;
       try {
+        const now = job.scheduledAt ? new Date(job.scheduledAt).getTime() : Date.now();
         await checkWatches(ctx, rt.token, {
           maxSuggestionsPerHourPerCompany: rt.config.maxSuggestionsPerHourPerCompany ?? 10,
           watchDeduplicationWindowMs: rt.config.watchDeduplicationWindowMs ?? 86400000,
-        });
+        }, undefined, now);
       } catch (err) {
         ctx.logger.error("Watch check failed", { error: String(err) });
       }
