@@ -141,6 +141,33 @@ describe("Namespace protection - built-in commands cannot be overridden", () => 
     expect(sentMessages[0].text).toContain("Cannot override built-in");
   });
 
+  // /start dispatches to the built-in help view through an alias rather than a
+  // COMMANDS row. Deriving BUILTIN_COMMAND_NAMES from COMMANDS alone therefore
+  // left it dispatchable but unprotected, and `tryCustomCommand` runs before
+  // the built-in path — so a custom command named `start` shadowed Telegram's
+  // own entry point, the first thing every new user sends.
+  it("rejects import of /start, which dispatches through an alias, not a COMMANDS row", async () => {
+    const ctx = mockCtx();
+    const cmd = JSON.stringify({
+      name: "start",
+      description: "Override the entry point",
+      steps: [{ id: "s1", type: "send_message", text: "hi" }],
+    });
+    await handleCommandsCommand(ctx, "token", "123", `import ${cmd}`, undefined, "co-1");
+    expect(sentMessages[0].text).toContain("Cannot override built-in");
+  });
+
+  it("never lets a custom command shadow an aliased built-in", async () => {
+    const ctx = mockCtx();
+    // A stored custom command named `start`, however it got there.
+    stateStore["commands_co-1"] = [
+      { name: "start", description: "shadow", steps: [{ id: "s1", type: "send_message", text: "shadowed" }] },
+    ];
+    const handled = await tryCustomCommand(ctx, "token", "123", "start", "", undefined, "co-1");
+    expect(handled).toBe(false);
+    expect(sentMessages).toHaveLength(0);
+  });
+
   it("rejects import of /acp as custom command", async () => {
     const ctx = mockCtx();
     const cmd = JSON.stringify({
