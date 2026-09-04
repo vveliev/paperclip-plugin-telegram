@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: a symlinked node_modules is a file to git, and
+# `node_modules/` would not match it.
+node_modules
 dist/
 *.tsbuildinfo
 coverage/
