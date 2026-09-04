@@ -6,6 +6,7 @@ import { fetchAttention, sendAttentionList, describeDecisionsError, DEFAULT_DISP
 import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { str } from "./coerce.js";
+import { isExternalUrl } from "./url-utils.js";
 
 type BotCommand = {
   command: string;
@@ -51,26 +52,38 @@ type TopicMappingRecord = {
 type TopicMappingValue = string | TopicMappingRecord;
 type TopicMap = Record<string, TopicMappingValue>;
 
-// Order drives the / menu Telegram shows on every chat (see setMyCommands in
-// worker.ts), so it is the only discovery path a user has — daily-use
-// commands lead, and setup/forum-only commands (connect, connect_topic,
-// topics) trail since most users touch them once or never.
-export const BOT_COMMANDS: BotCommand[] = [
-  { command: "create", description: "Create a new task for the team" },
-  { command: "decisions", description: "List decisions waiting on your input" },
-  { command: "status", description: "Show a quick snapshot: active agents and open issues" },
-  { command: "issues", description: "List open issues, optionally by project" },
-  { command: "agents", description: "List all agents and what they're doing" },
-  { command: "approve", description: "Approve a pending request by its ID" },
-  { command: "help", description: "Show this list of commands" },
-  { command: "settings", description: "Show connection, routing, and notification settings" },
-  { command: "keyboard", description: "Toggle a persistent shortcut keyboard (DMs only)" },
-  { command: "acp", description: "Manage agent sessions: start, check, cancel, or close" },
-  { command: "commands", description: "Manage custom commands: list, import, run, or delete" },
-  { command: "connect", description: "Link this chat to a Paperclip company" },
-  { command: "connect_topic", description: "Map a project to this forum topic (forum groups only)" },
-  { command: "topics", description: "List or remove this chat's forum topic mappings" },
-];
+// Everything a command's handler might need. Individual handlers only read
+// the subset relevant to them — this exists so the table below can hold one
+// handler signature instead of thirteen different positional ones.
+type CommandContext = {
+  ctx: PluginContext;
+  token: string;
+  chatId: string;
+  args: string;
+  messageThreadId?: number;
+  baseUrl?: string;
+  publicUrl?: string;
+  companyId?: string;
+  boardApiToken?: string;
+  maxAgentsPerThread?: number;
+  settingsConfig?: ChatSettingsConfig;
+  chatType?: string;
+};
+
+// Everything handleCommand needs beyond the identifying (chatId, command,
+// args) triple. Bundled into one object instead of nine more positional
+// parameters — a caller that only cares about, say, chatType no longer has
+// to pad seven leading `undefined`s to reach it.
+export type HandleCommandOptions = {
+  messageThreadId?: number;
+  baseUrl?: string;
+  publicUrl?: string;
+  companyId?: string;
+  boardApiToken?: string;
+  maxAgentsPerThread?: number;
+  settingsConfig?: ChatSettingsConfig;
+  chatType?: string;
+};
 
 type HelpEntry = {
   // Full invocation grammar, e.g. "/acp <spawn|status|cancel|close>". Inlined
@@ -86,125 +99,227 @@ type HelpGroup = {
   entries: HelpEntry[];
 };
 
-// Grouped by task rather than BOT_COMMANDS's flat menu order: a first-time
-// user scanning /help should be able to tell "what do I use for approvals"
-// at a glance, not read 13 undifferentiated lines. Every command in
-// BOT_COMMANDS appears in exactly one group here (enforced by a test).
-export const HELP_GROUPS: HelpGroup[] = [
+// Every command Telegram, /help, the custom-command override guard, and the
+// board-token gate need to agree exists. This is the single source of truth
+// those four views are derived from below — a command added here shows up
+// everywhere at once, and one that is missing here can't silently exist in
+// only one of the four.
+type CommandDefinition = {
+  command: string;
+  // Shown in Telegram's / menu (setMyCommands in worker.ts). Table order is
+  // menu order: daily-use commands lead, setup/forum-only ones trail, since
+  // that menu is the only discovery path a user has.
+  menuDescription: string;
+  helpGroup: string;
+  // Overrides this entry's position within its help group; defaults to its
+  // index in this table. Only needed where help order and menu order
+  // disagree — currently just "Agent sessions", which leads with /acp in
+  // /help despite /agents coming first in the menu.
+  helpOrder?: number;
+  helpUsage: string;
+  helpDescription: string;
+  // Whether dispatching this command needs a resolved board API token (see
+  // resolveBoardApiToken in worker.ts) — fetched once per command that
+  // actually hits a board-only endpoint, not on every command.
+  needsBoardToken: boolean;
+  // null for "commands": worker.ts intercepts /commands before handleCommand
+  // is ever called, since custom-command CRUD lives in command-registry.ts.
+  // It still needs a row here so the menu, help text, and override guard
+  // know about it.
+  handler: ((cc: CommandContext) => Promise<void>) | null;
+};
+
+const HELP_GROUP_ORDER = ["Daily use", "Approvals", "Agent sessions", "Automation", "Setup"];
+
+const COMMANDS: CommandDefinition[] = [
   {
-    title: "Daily use",
-    entries: [
-      { usage: "/create <title>", description: "Create a new task for the team" },
-      { usage: "/status", description: "Quick snapshot: active agents and open issues" },
-      { usage: "/issues [project]", description: "List open issues, optionally filtered by project" },
-      { usage: "/help", description: "Show this list of commands" },
-    ],
+    command: "create",
+    menuDescription: "Create a new task for the team",
+    helpGroup: "Daily use",
+    helpUsage: "/create <title>",
+    helpDescription: "Create a new task for the team",
+    needsBoardToken: false,
+    handler: (cc) => handleCreate(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId, cc.publicUrl || cc.baseUrl, cc.companyId),
   },
   {
-    title: "Approvals",
-    entries: [
-      { usage: "/decisions [n|more]", description: "List decisions waiting on your input, optionally more than the default 5" },
-      { usage: "/approve <id>", description: "Approve a pending request by its ID" },
-    ],
+    command: "decisions",
+    menuDescription: "List decisions waiting on your input",
+    helpGroup: "Approvals",
+    helpUsage: "/decisions [n|more]",
+    helpDescription: "List decisions waiting on your input, optionally more than the default 5",
+    needsBoardToken: true,
+    handler: (cc) => handleDecisions(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId, cc.baseUrl, cc.publicUrl, cc.companyId, cc.boardApiToken),
   },
   {
-    title: "Agent sessions",
-    entries: [
-      { usage: "/acp <spawn|status|cancel|close>", description: "Start, check, cancel, or close an agent session" },
-      { usage: "/agents", description: "List all agents and what they're doing" },
-    ],
+    command: "status",
+    menuDescription: "Show a quick snapshot: active agents and open issues",
+    helpGroup: "Daily use",
+    helpUsage: "/status",
+    helpDescription: "Quick snapshot: active agents and open issues",
+    needsBoardToken: false,
+    handler: (cc) => handleStatus(cc.ctx, cc.token, cc.chatId, cc.messageThreadId, cc.publicUrl, cc.companyId),
   },
   {
-    title: "Automation",
-    entries: [
-      { usage: "/commands <list|import|run|delete>", description: "Manage custom commands" },
-    ],
+    command: "issues",
+    menuDescription: "List open issues, optionally by project",
+    helpGroup: "Daily use",
+    helpUsage: "/issues [project]",
+    helpDescription: "List open issues, optionally filtered by project",
+    needsBoardToken: false,
+    handler: (cc) => handleIssues(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId, cc.publicUrl || cc.baseUrl, cc.companyId),
   },
   {
-    title: "Setup",
-    entries: [
-      { usage: "/settings", description: "Show connection, routing, and notification settings" },
-      { usage: "/keyboard <on|off>", description: "Toggle a persistent shortcut keyboard (DMs only)" },
-      { usage: "/connect <company>", description: "Link this chat to a Paperclip company" },
-      { usage: "/connect_topic <project> [topic-id]", description: "Map a project to this forum topic (forum groups only)" },
-      { usage: "/topics <list|remove|clear>", description: "Manage this chat's forum topic mappings" },
-    ],
+    command: "agents",
+    menuDescription: "List all agents and what they're doing",
+    helpGroup: "Agent sessions",
+    helpOrder: 90, // see the helpOrder note on CommandDefinition — /acp leads in /help
+    helpUsage: "/agents",
+    helpDescription: "List all agents and what they're doing",
+    needsBoardToken: false,
+    handler: (cc) => handleAgents(cc.ctx, cc.token, cc.chatId, cc.messageThreadId, cc.publicUrl, cc.companyId),
+  },
+  {
+    command: "approve",
+    menuDescription: "Approve a pending request by its ID",
+    helpGroup: "Approvals",
+    helpUsage: "/approve <id>",
+    helpDescription: "Approve a pending request by its ID",
+    needsBoardToken: true,
+    handler: (cc) => handleApprove(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId, cc.baseUrl, cc.boardApiToken),
+  },
+  {
+    command: "help",
+    menuDescription: "Show this list of commands",
+    helpGroup: "Daily use",
+    helpUsage: "/help",
+    helpDescription: "Show this list of commands",
+    needsBoardToken: false,
+    handler: (cc) => handleHelp(cc.ctx, cc.token, cc.chatId, cc.messageThreadId),
+  },
+  {
+    command: "settings",
+    menuDescription: "Show connection, routing, and notification settings",
+    helpGroup: "Setup",
+    helpUsage: "/settings",
+    helpDescription: "Show connection, routing, and notification settings",
+    needsBoardToken: false,
+    handler: (cc) => handleSettings(cc.ctx, cc.token, cc.chatId, cc.messageThreadId, cc.settingsConfig ?? DEFAULT_SETTINGS_CONFIG),
+  },
+  {
+    command: "keyboard",
+    menuDescription: "Toggle a persistent shortcut keyboard (DMs only)",
+    helpGroup: "Setup",
+    helpUsage: "/keyboard <on|off>",
+    helpDescription: "Toggle a persistent shortcut keyboard (DMs only)",
+    needsBoardToken: false,
+    handler: (cc) => handleKeyboard(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId, cc.chatType),
+  },
+  {
+    command: "acp",
+    menuDescription: "Manage agent sessions: start, check, cancel, or close",
+    helpGroup: "Agent sessions",
+    helpUsage: "/acp <spawn|status|cancel|close>",
+    helpDescription: "Start, check, cancel, or close an agent session",
+    needsBoardToken: false,
+    handler: (cc) => handleAcpCommand(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId, cc.companyId, cc.maxAgentsPerThread),
+  },
+  {
+    command: "commands",
+    menuDescription: "Manage custom commands: list, import, run, or delete",
+    helpGroup: "Automation",
+    helpUsage: "/commands <list|import|run|delete>",
+    helpDescription: "Manage custom commands",
+    needsBoardToken: false,
+    handler: null,
+  },
+  {
+    command: "connect",
+    menuDescription: "Link this chat to a Paperclip company",
+    helpGroup: "Setup",
+    helpUsage: "/connect <company>",
+    helpDescription: "Link this chat to a Paperclip company",
+    needsBoardToken: false,
+    handler: (cc) => handleConnect(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId),
+  },
+  {
+    command: "connect_topic",
+    menuDescription: "Map a project to this forum topic (forum groups only)",
+    helpGroup: "Setup",
+    helpUsage: "/connect_topic <project> [topic-id]",
+    helpDescription: "Map a project to this forum topic (forum groups only)",
+    needsBoardToken: false,
+    handler: (cc) => handleConnectTopic(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId),
+  },
+  {
+    command: "topics",
+    menuDescription: "List or remove this chat's forum topic mappings",
+    helpGroup: "Setup",
+    helpUsage: "/topics <list|remove|clear>",
+    helpDescription: "Manage this chat's forum topic mappings",
+    needsBoardToken: false,
+    handler: (cc) => handleTopicsCommand(cc.ctx, cc.token, cc.chatId, cc.args, cc.messageThreadId),
   },
 ];
 
+const COMMANDS_BY_NAME = new Map(COMMANDS.map((c) => [c.command, c]));
+
+// Derived view #1: the Telegram / menu.
+export const BOT_COMMANDS: BotCommand[] = COMMANDS.map((c) => ({ command: c.command, description: c.menuDescription }));
+
+// Derived view #2: /help, grouped by task instead of BOT_COMMANDS's flat menu
+// order — a first-time user scanning /help should be able to tell "what do I
+// use for approvals" at a glance. Grouping is derived from the same table
+// BOT_COMMANDS uses, so the two cannot drift apart the way they used to (a
+// test enforced that pairing; it is redundant now that drift is structurally
+// impossible, so it has been removed).
+export const HELP_GROUPS: HelpGroup[] = HELP_GROUP_ORDER.map((title) => ({
+  title,
+  entries: COMMANDS
+    .map((c, index) => ({ c, sortKey: c.helpOrder ?? index }))
+    .filter(({ c }) => c.helpGroup === title)
+    .sort((a, b) => a.sortKey - b.sortKey)
+    .map(({ c }) => ({ usage: c.helpUsage, description: c.helpDescription })),
+}));
+
+// Derived view #3: the custom-command override guard (command-registry.ts) —
+// every name in this table is reserved and cannot be redefined as a custom
+// command.
+export const BUILTIN_COMMAND_NAMES: ReadonlySet<string> = new Set(COMMANDS.map((c) => c.command));
+
+// Derived view #4: which commands need a board API token resolved before
+// dispatch (worker.ts).
+export const BOARD_TOKEN_COMMAND_NAMES: ReadonlySet<string> = new Set(
+  COMMANDS.filter((c) => c.needsBoardToken).map((c) => c.command),
+);
+
+// Derived view #5: dispatch. Replaces the former 15-case switch — each case
+// is now a row in COMMANDS above.
 export async function handleCommand(
   ctx: PluginContext,
   token: string,
   chatId: string,
   command: string,
   args: string,
-  messageThreadId?: number,
-  baseUrl?: string,
-  publicUrl?: string,
-  companyId?: string,
-  boardApiToken?: string,
-  maxAgentsPerThread?: number,
-  settingsConfig?: ChatSettingsConfig,
-  chatType?: string,
+  opts: HandleCommandOptions = {},
 ): Promise<void> {
   await ctx.metrics.write(METRIC_NAMES.commandsHandled, 1);
 
-  switch (command) {
-    case "create":
-      await handleCreate(ctx, token, chatId, args, messageThreadId, publicUrl || baseUrl, companyId);
-      break;
-    case "decisions":
-      await handleDecisions(ctx, token, chatId, args, messageThreadId, baseUrl, publicUrl, companyId, boardApiToken);
-      break;
-    case "status":
-      await handleStatus(ctx, token, chatId, messageThreadId, publicUrl, companyId);
-      break;
-    case "issues":
-      await handleIssues(ctx, token, chatId, args, messageThreadId, publicUrl || baseUrl, companyId);
-      break;
-    case "agents":
-      await handleAgents(ctx, token, chatId, messageThreadId, publicUrl, companyId);
-      break;
-    case "approve":
-      await handleApprove(ctx, token, chatId, args, messageThreadId, baseUrl, boardApiToken);
-      break;
-    // /start is Telegram's own entry point — the button the client shows on
-    // every new chat, so it is the first thing a user ever sends. With no case
-    // here it fell through to "Unknown command: /start", which is the worst
-    // possible first impression. Answer it with the command list.
-    case "start":
-    case "help":
-      await handleHelp(ctx, token, chatId, messageThreadId);
-      break;
-    case "settings":
-      await handleSettings(ctx, token, chatId, messageThreadId, settingsConfig ?? DEFAULT_SETTINGS_CONFIG);
-      break;
-    case "keyboard":
-      await handleKeyboard(ctx, token, chatId, args, messageThreadId, chatType);
-      break;
-    case "connect":
-      await handleConnect(ctx, token, chatId, args, messageThreadId);
-      break;
-    case "connect_topic":
-      await handleConnectTopic(ctx, token, chatId, args, messageThreadId);
-      break;
-    case "topics":
-      await handleTopicsCommand(ctx, token, chatId, args, messageThreadId);
-      break;
-    case "acp":
-      await handleAcpCommand(ctx, token, chatId, args, messageThreadId, companyId, maxAgentsPerThread);
-      break;
-    default:
-      // plain: interpolates the raw command name the user typed
-      await sendMessage(ctx, token, chatId, `Unknown command: /${command}. Try /help`, {
-        parseMode: undefined,
-        messageThreadId,
-      });
-  }
-}
+  // /start is Telegram's own entry point — the button the client shows on
+  // every new chat, so it is the first thing a user ever sends. It has no
+  // menu/help entry of its own; it just answers with the same view as /help.
+  const lookupCommand = command === "start" ? "help" : command;
+  const entry = COMMANDS_BY_NAME.get(lookupCommand);
 
-function isExternalUrl(url?: string): boolean {
-  return !!url && url.startsWith("https://");
+  if (!entry?.handler) {
+    // plain: interpolates the raw command name the user typed
+    await sendMessage(ctx, token, chatId, `Unknown command: /${command}. Try /help`, {
+      parseMode: undefined,
+      messageThreadId: opts.messageThreadId,
+    });
+    return;
+  }
+
+  await entry.handler({ ctx, token, chatId, args, ...opts });
 }
 
 /**
