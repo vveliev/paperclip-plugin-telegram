@@ -69,9 +69,9 @@ export const TRUNCATE_LONG = 350;
 
 // Cutoff for the error text shown inline in an agent-error notification, and
 // reused wherever else a 500-char tier is needed. formatAgentError truncates
-// at this length and, when it does, adds a distinct "Full error" button
-// rather than relying on "View Run" to double as the link back to the
-// untruncated text (BLA-362).
+// at this length and, when it does, swaps "View Run" for a "Full error"
+// button in the same keyboard slot — both link to the run page, so only one
+// is ever shown (BLA-362, GIF-139).
 export const AGENT_ERROR_TRUNCATE_LENGTH = 500;
 
 export const MAX_CONVERSATION_TURNS = 50;
