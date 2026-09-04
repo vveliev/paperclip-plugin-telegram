@@ -28,7 +28,10 @@ const PATTERNS = [
     why: "internal tracker id",
     // Conventional-commit scopes and CVEs are not tracker ids.
     // Standards, licences and wire constants share the shape but are not tracker ids.
-    ignore: /^(UTF|ISO|RFC|CVE|SHA|HTTP|API|SDK|ACP|UI|CI|BSD|GPL|LGPL|MPL|AGPL|EPL|CC|MIT|ECMA|RGB|AES|SHA1|SHA256)-/,
+    // Standards, licences, wire constants -- and placeholder prefixes used as
+    // test fixtures. PROJ- in particular is upstream's own fixture convention;
+    // flagging it would fail their tests as if they were our leak.
+    ignore: /^(UTF|ISO|RFC|CVE|SHA|HTTP|API|SDK|ACP|UI|CI|BSD|GPL|LGPL|MPL|AGPL|EPL|CC|MIT|ECMA|RGB|AES|SHA1|SHA256|PROJ|TEST|EXAMPLE|FOO|BAR|ISSUE|CHAT)-/,
   },
   {
     id: "agent-trailer",
