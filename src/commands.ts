@@ -286,7 +286,25 @@ export const HELP_GROUPS: HelpGroup[] = HELP_GROUP_ORDER.map((title) => ({
 // Derived view #3: the custom-command override guard (command-registry.ts) —
 // every name in this table is reserved and cannot be redefined as a custom
 // command.
-export const BUILTIN_COMMAND_NAMES: ReadonlySet<string> = new Set(COMMANDS.map((c) => c.command));
+/**
+ * Names that dispatch to a built-in but have no COMMANDS row of their own.
+ *
+ * /start is Telegram's own entry point — the button the client shows on every
+ * new chat, so it is the first thing a user ever sends. It deliberately has no
+ * menu or help entry; it just answers with the same view as /help.
+ *
+ * An alias is still dispatchable, so it must still be un-overridable. Deriving
+ * BUILTIN_COMMAND_NAMES from COMMANDS alone left /start dispatchable but
+ * unprotected: `tryCustomCommand` runs before the built-in path, so an imported
+ * custom command named `start` would shadow the entry point for every new user,
+ * and `importCommand` would not reject it either.
+ */
+const COMMAND_ALIASES: Readonly<Record<string, string>> = { start: "help" };
+
+export const BUILTIN_COMMAND_NAMES: ReadonlySet<string> = new Set([
+  ...COMMANDS.map((c) => c.command),
+  ...Object.keys(COMMAND_ALIASES),
+]);
 
 // Derived view #4: which commands need a board API token resolved before
 // dispatch (worker.ts).
@@ -306,10 +324,7 @@ export async function handleCommand(
 ): Promise<void> {
   await ctx.metrics.write(METRIC_NAMES.commandsHandled, 1);
 
-  // /start is Telegram's own entry point — the button the client shows on
-  // every new chat, so it is the first thing a user ever sends. It has no
-  // menu/help entry of its own; it just answers with the same view as /help.
-  const lookupCommand = command === "start" ? "help" : command;
+  const lookupCommand = COMMAND_ALIASES[command] ?? command;
   const entry = COMMANDS_BY_NAME.get(lookupCommand);
 
   if (!entry?.handler) {
