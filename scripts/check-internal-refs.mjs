@@ -28,7 +28,10 @@ const PATTERNS = [
     why: "internal tracker id",
     // Conventional-commit scopes and CVEs are not tracker ids.
     // Standards, licences and wire constants share the shape but are not tracker ids.
-    ignore: /^(UTF|ISO|RFC|CVE|SHA|HTTP|API|SDK|ACP|UI|CI|BSD|GPL|LGPL|MPL|AGPL|EPL|CC|MIT|ECMA|RGB|AES|SHA1|SHA256)-/,
+    // Standards, licences, wire constants -- and placeholder prefixes used as
+    // test fixtures. PROJ- in particular is upstream's own fixture convention;
+    // flagging it would fail their tests as if they were our leak.
+    ignore: /^(UTF|ISO|RFC|CVE|SHA|HTTP|API|SDK|ACP|UI|CI|BSD|GPL|LGPL|MPL|AGPL|EPL|CC|MIT|ECMA|RGB|AES|SHA1|SHA256|PROJ|TEST|EXAMPLE|FOO|BAR|ISSUE|CHAT)-/,
   },
   {
     id: "agent-trailer",
@@ -69,15 +72,22 @@ if (wordlistPath && existsSync(wordlistPath)) {
 
 // Generated or vendored files are not authored content; scanning them only
 // produces noise from third-party licence strings.
-const SKIP = [/(^|\/)package-lock\.json$/, /(^|\/)(dist|coverage|node_modules)\//];
+const SKIP = [/(^|\/)package-lock\.json$/, /(^|\/)(dist|coverage|node_modules)(\/|$)/];
 const skipped = (f) => SKIP.some((r) => r.test(f));
 
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 }
 
-function scan(text, label, findings) {
+/**
+ * @param exclude pattern ids to skip for this text. A branch name derived from
+ *   an issue id is metadata that reveals nothing -- the UUID rule exists to
+ *   catch instance/company/agent ids leaking into published *content*, and
+ *   applying it to a branch name would forbid the safest template available.
+ */
+function scan(text, label, findings, exclude = []) {
   for (const p of PATTERNS) {
+    if (exclude.includes(p.id)) continue;
     p.re.lastIndex = 0;
     for (const m of text.matchAll(p.re)) {
       if (p.ignore && p.ignore.test(m[0])) continue;
@@ -103,10 +113,30 @@ if (mode === "--text") {
     scan(git(["show", `:${f}`]), f, findings);
   }
 } else if (mode === "--range") {
-  const [, files] = [null, git(["diff", "--name-only", "--diff-filter=ACM", arg]).split("\n").filter(Boolean)];
-  for (const f of files) { if (!skipped(f)) scan(readFileSync(f, "utf8"), f, findings); }
+  // Scan ADDED LINES, not whole files. A change that merely touches a file
+  // carrying a legacy reference publishes nothing new, and failing it would
+  // make the gate block almost every edit -- which is how a gate gets
+  // switched off. `git diff -U0` gives exactly the lines this range adds.
+  let currentFile = null;
+  let lineNo = 0;
+  for (const raw of git(["diff", "-U0", "--diff-filter=ACM", arg]).split("\n")) {
+    if (raw.startsWith("+++ b/")) {
+      currentFile = raw.slice(6);
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(raw);
+    if (hunk) {
+      lineNo = Number(hunk[1]);
+      continue;
+    }
+    if (!raw.startsWith("+") || raw.startsWith("+++")) continue;
+    if (currentFile && !skipped(currentFile)) {
+      scan(raw.slice(1), `${currentFile}:${lineNo}`, findings);
+    }
+    lineNo++;
+  }
   scan(git(["log", "--format=%B%n%an <%ae>", arg]), "commit messages", findings);
-  scan(git(["rev-parse", "--abbrev-ref", "HEAD"]), "branch name", findings);
+  scan(git(["rev-parse", "--abbrev-ref", "HEAD"]), "branch name", findings, ["instance-uuid"]);
 } else {
   console.error("usage: check-internal-refs.mjs --staged | --range A..B | --message FILE | --text ENVVAR");
   process.exit(2);
