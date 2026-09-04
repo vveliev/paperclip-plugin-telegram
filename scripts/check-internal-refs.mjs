@@ -19,7 +19,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, existsSync, lstatSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 
 const PATTERNS = [
   {
@@ -74,23 +74,6 @@ if (wordlistPath && existsSync(wordlistPath)) {
 // produces noise from third-party licence strings.
 const SKIP = [/(^|\/)package-lock\.json$/, /(^|\/)(dist|coverage|node_modules)(\/|$)/];
 const skipped = (f) => SKIP.some((r) => r.test(f));
-
-/**
- * Read a path only if it is a regular file we can actually open.
- *
- * A diff can name a symlink, a submodule, or a path that no longer exists in
- * the working tree. Letting readFileSync throw would fail the job with a stack
- * trace rather than a finding -- a gate that dies for the wrong reason is one
- * people learn to ignore, so it must degrade to skipping the path.
- */
-function readIfRegularFile(f) {
-  try {
-    if (!lstatSync(f).isFile()) return null;
-    return readFileSync(f, "utf8");
-  } catch {
-    return null;
-  }
-}
 
 function git(args) {
   return execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
