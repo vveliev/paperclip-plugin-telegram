@@ -403,8 +403,8 @@ describe("handleHandoffToolCall - approval callback data", () => {
     const rejectBtn = keyboard.flat().find((b: { text: string }) => b.text === "Reject");
     expect(approveBtn).toBeDefined();
     expect(rejectBtn).toBeDefined();
-    expect(approveBtn!.callback_data).toMatch(/^handoff_approve_/);
-    expect(rejectBtn!.callback_data).toMatch(/^handoff_reject_/);
+    expect(approveBtn!.callback_data).toMatch(/^pk:ho:.+:approve$/);
+    expect(rejectBtn!.callback_data).toMatch(/^pk:ho:.+:reject$/);
   });
 
   it("executes handoff immediately when requiresApproval is false", async () => {

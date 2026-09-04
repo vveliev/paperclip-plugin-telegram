@@ -303,7 +303,7 @@ describe("setup() registration surface", () => {
     // A handler missing from this list runs nowhere and fails nowhere — the
     // host simply never calls it. That silence is exactly what this pins.
     expect(Object.keys(harness.jobs).sort()).toEqual(
-      ["check-escalation-timeouts", "check-watches", "telegram-daily-digest"].sort(),
+      ["check-escalation-timeouts", "check-watches", "sweep-parked-interactions", "telegram-daily-digest"].sort(),
     );
     expect(Object.keys(harness.tools).sort()).toEqual(
       ["discuss_with_agent", "escalate_to_human", "handoff_to_agent", "register_watch"].sort(),
@@ -994,7 +994,7 @@ describe("setup() on a governed host (BLA-620)", () => {
     await expect(plugin.definition.setup(harness.ctx)).resolves.toBeUndefined();
 
     expect(harness.ctx.logger.error).not.toHaveBeenCalled();
-    expect(Object.keys(harness.jobs)).toHaveLength(3);
+    expect(Object.keys(harness.jobs)).toHaveLength(4);
     expect(harness.events["issue.created"]).toHaveLength(1);
   });
 

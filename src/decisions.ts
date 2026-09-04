@@ -10,6 +10,7 @@ import {
   type AskUserQuestionsPayload,
   type RequestConfirmationPayload,
 } from "./interaction-answers.js";
+import { encodeCallback, decodeCallback } from "./parked-interactions.js";
 
 /**
  * What is actually waiting on a human, read from the same source the Decisions
@@ -41,7 +42,6 @@ import {
 export const DEFAULT_DISPLAY_LIMIT = 5;
 export const DECISIONS_PAGE_SIZE = 20;
 const MAX_ATTENTION_LIMIT = 100;
-const DECISIONS_MORE_PREFIX = "dec_more_";
 
 export type AttentionItem = {
   id: string;
@@ -280,7 +280,7 @@ export function renderAttentionItem(
 }
 
 function approveButtonRow(approvalId: string) {
-  return [[{ text: "✅ Approve", callback_data: `approve_${approvalId}` }]];
+  return [[{ text: "✅ Approve", callback_data: encodeCallback("apr", approvalId, "approve") }]];
 }
 
 export async function sendAttentionList(
@@ -355,14 +355,14 @@ export async function sendAttentionList(
       parseMode: undefined,
       messageThreadId: opts.messageThreadId,
       inlineKeyboard: canPageFurther
-        ? [[{ text: `Show more (+${Math.min(DECISIONS_PAGE_SIZE, remaining)})`, callback_data: `${DECISIONS_MORE_PREFIX}${shownThrough}` }]]
+        ? [[{ text: `Show more (+${Math.min(DECISIONS_PAGE_SIZE, remaining)})`, callback_data: encodeCallback("dm", String(shownThrough), "more") }]]
         : undefined,
     });
   }
 }
 
 export function isDecisionsMoreCallback(data: string): boolean {
-  return data.startsWith(DECISIONS_MORE_PREFIX);
+  return decodeCallback(data)?.flow === "dm";
 }
 
 /**
@@ -385,7 +385,8 @@ export async function resolveDecisionsMoreCallback(
     boardApiToken?: string;
   },
 ): Promise<void> {
-  const offset = Number(data.slice(DECISIONS_MORE_PREFIX.length));
+  const decoded = decodeCallback(data);
+  const offset = decoded?.flow === "dm" ? Number(decoded.key) : NaN;
   if (!Number.isInteger(offset) || offset < 0) {
     await answerCallbackQuery(ctx, token, callbackQueryId, "Could not load more.");
     return;

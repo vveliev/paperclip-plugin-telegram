@@ -338,7 +338,7 @@ describe("handleUpdate - callback query dispatch", () => {
 
   it("approves via the board API and edits the message on approve_", async () => {
     const ctx = mockCtx();
-    await handleUpdate(ctx, "token", config, callbackUpdate("approve_apr-1", 10), baseUrl);
+    await handleUpdate(ctx, "token", config, callbackUpdate("pk:apr:apr-1:approve", 10), baseUrl);
 
     expect(fetchCalls.some((c) => c.url.includes("/api/approvals/apr-1/approve"))).toBe(true);
     expect(answeredCallbacks.some((a) => a.text === "Approved")).toBe(true);
@@ -348,7 +348,7 @@ describe("handleUpdate - callback query dispatch", () => {
 
   it("rejects via the board API and edits the message on reject_", async () => {
     const ctx = mockCtx();
-    await handleUpdate(ctx, "token", config, callbackUpdate("reject_apr-2", 11), baseUrl);
+    await handleUpdate(ctx, "token", config, callbackUpdate("pk:apr:apr-2:reject", 11), baseUrl);
 
     expect(fetchCalls.some((c) => c.url.includes("/api/approvals/apr-2/reject"))).toBe(true);
     expect(answeredCallbacks.some((a) => a.text === "Rejected")).toBe(true);
@@ -359,7 +359,7 @@ describe("handleUpdate - callback query dispatch", () => {
     const ctx = mockCtx();
 
     await expect(
-      handleUpdate(ctx, "token", config, callbackUpdate("approve_apr-3", 12), baseUrl),
+      handleUpdate(ctx, "token", config, callbackUpdate("pk:apr:apr-3:approve", 12), baseUrl),
     ).resolves.toBeUndefined();
 
     expect(answeredCallbacks.some((a) => a.text?.startsWith("Failed"))).toBe(true);
@@ -369,14 +369,14 @@ describe("handleUpdate - callback query dispatch", () => {
 
   it("dispatches handoff_approve_ to handleHandoffApproval", async () => {
     const ctx = mockCtx();
-    await handleUpdate(ctx, "token", config, callbackUpdate("handoff_approve_h1", 13), baseUrl);
+    await handleUpdate(ctx, "token", config, callbackUpdate("pk:ho:h1:approve", 13), baseUrl);
     expect(handoffApprovalCalls).toHaveLength(1);
     expect(answeredCallbacks.some((a) => a.text === "Handoff approved")).toBe(true);
   });
 
   it("dispatches handoff_reject_ to handleHandoffRejection", async () => {
     const ctx = mockCtx();
-    await handleUpdate(ctx, "token", config, callbackUpdate("handoff_reject_h2", 14), baseUrl);
+    await handleUpdate(ctx, "token", config, callbackUpdate("pk:ho:h2:reject", 14), baseUrl);
     expect(handoffRejectionCalls).toHaveLength(1);
     expect(answeredCallbacks.some((a) => a.text === "Handoff rejected")).toBe(true);
   });

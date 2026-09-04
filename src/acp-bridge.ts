@@ -3,6 +3,7 @@ import { sendMessage, editMessage, escapeMarkdownV2, sendChatAction } from "./te
 import { truncateAtWord } from "./telegram-api.js";
 import { resolveMappedProjectIdForTopic } from "./topic-projects.js";
 import { str } from "./coerce.js";
+import { park, unpark, clear, encodeCallback } from "./parked-interactions.js";
 import {
   MAX_AGENTS_PER_THREAD,
   DEFAULT_CONVERSATION_TURNS,
@@ -1141,17 +1142,6 @@ export async function handleHandoffToolCall(
   ].join("\n");
 
   if (requiresApproval) {
-    await sendMessage(ctx, token, chatId, handoffText, {
-      parseMode: "MarkdownV2",
-      messageThreadId: threadId,
-      inlineKeyboard: [
-        [
-          { text: "Approve", callback_data: `handoff_approve_${handoffId}` },
-          { text: "Reject", callback_data: `handoff_reject_${handoffId}` },
-        ],
-      ],
-    });
-
     const pending: PendingHandoff = {
       handoffId,
       sourceSessionId: sourceSession?.sessionId ?? "",
@@ -1163,10 +1153,21 @@ export async function handleHandoffToolCall(
       threadId,
       companyId,
     };
-    await ctx.state.set(
-      { scopeKind: "instance", stateKey: `handoff_${handoffId}` },
-      pending,
-    );
+    // handoffId is minted here (not by parked-interactions.ts) so the tool
+    // call's returned JSON can report it before the message with its buttons
+    // is even sent.
+    await park(ctx, "ho", pending, { key: handoffId });
+
+    await sendMessage(ctx, token, chatId, handoffText, {
+      parseMode: "MarkdownV2",
+      messageThreadId: threadId,
+      inlineKeyboard: [
+        [
+          { text: "Approve", callback_data: encodeCallback("ho", handoffId, "approve") },
+          { text: "Reject", callback_data: encodeCallback("ho", handoffId, "reject") },
+        ],
+      ],
+    });
 
     return { content: JSON.stringify({ status: "pending_approval", handoffId }) };
   }
@@ -1191,21 +1192,13 @@ export async function handleHandoffApproval(
   _chatId: string | null,
   _messageId: number | undefined,
 ): Promise<void> {
-  const pending = await ctx.state.get({
-    scopeKind: "instance",
-    stateKey: `handoff_${handoffId}`,
-  }) as PendingHandoff | null;
-
-  if (!pending) return;
+  const result = await unpark<PendingHandoff>(ctx, "ho", handoffId);
+  if (result.status !== "live") return;
+  const pending = result.payload;
+  await clear(ctx, "ho", handoffId);
 
   const sessions = await getSessions(ctx, pending.chatId, pending.threadId);
   await executeHandoff(ctx, token, pending.chatId, pending.threadId, pending.targetAgent, pending.contextSummary, sessions, pending.companyId);
-
-  // This runs outside handleCallbackQuery's try/catch, so a throw here
-  // (BLA-606: a null write hits the NOT-NULL constraint on
-  // plugin_state.value_json) escapes to handleUpdate and freezes the
-  // polling offset for every chat.
-  await ctx.state.delete({ scopeKind: "instance", stateKey: `handoff_${handoffId}` });
 
   ctx.logger.info("Handoff approved", { handoffId, actor, targetAgent: pending.targetAgent });
 }
@@ -1219,12 +1212,10 @@ export async function handleHandoffRejection(
   _chatId: string | null,
   _messageId: number | undefined,
 ): Promise<void> {
-  const pending = await ctx.state.get({
-    scopeKind: "instance",
-    stateKey: `handoff_${handoffId}`,
-  }) as PendingHandoff | null;
-
-  if (!pending) return;
+  const result = await unpark<PendingHandoff>(ctx, "ho", handoffId);
+  if (result.status !== "live") return;
+  const pending = result.payload;
+  await clear(ctx, "ho", handoffId);
 
   await sendMessage(
     ctx,
@@ -1233,8 +1224,6 @@ export async function handleHandoffRejection(
     `${escapeMarkdownV2("\u274c")} Handoff to *${escapeMarkdownV2(pending.targetAgent)}* rejected by ${escapeMarkdownV2(actor)}`,
     { parseMode: "MarkdownV2", messageThreadId: pending.threadId },
   );
-
-  await ctx.state.delete({ scopeKind: "instance", stateKey: `handoff_${handoffId}` });
 
   ctx.logger.info("Handoff rejected", { handoffId, actor, targetAgent: pending.targetAgent });
 }

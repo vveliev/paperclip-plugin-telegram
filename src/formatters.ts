@@ -3,6 +3,7 @@ import { escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import type { SendMessageOptions } from "./telegram-api.js";
 import { str } from "./coerce.js";
 import { AGENT_ERROR_TRUNCATE_LENGTH, TRUNCATE_SHORT, TRUNCATE_MEDIUM } from "./constants.js";
+import { encodeCallback } from "./parked-interactions.js";
 
 // --- Telegram message formatting convention (GIF-42) ---
 //
@@ -272,8 +273,8 @@ export function formatApprovalCreated(event: PluginEvent, opts?: IssueLinksOpts)
 
   const keyboard: Array<Array<{ text: string; callback_data?: string; url?: string }>> = [
     [
-      { text: "Approve", callback_data: `approve_${approvalId}` },
-      { text: "Reject", callback_data: `reject_${approvalId}` },
+      { text: "Approve", callback_data: encodeCallback("apr", approvalId, "approve") },
+      { text: "Reject", callback_data: encodeCallback("apr", approvalId, "reject") },
     ],
   ];
 
