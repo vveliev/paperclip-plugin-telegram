@@ -120,11 +120,27 @@ if (mode === "--text") {
     scan(git(["show", `:${f}`]), f, findings);
   }
 } else if (mode === "--range") {
-  const [, files] = [null, git(["diff", "--name-only", "--diff-filter=ACM", arg]).split("\n").filter(Boolean)];
-  for (const f of files) {
-    if (skipped(f)) continue;
-    const text = readIfRegularFile(f);
-    if (text !== null) scan(text, f, findings);
+  // Scan ADDED LINES, not whole files. A change that merely touches a file
+  // carrying a legacy reference publishes nothing new, and failing it would
+  // make the gate block almost every edit -- which is how a gate gets
+  // switched off. `git diff -U0` gives exactly the lines this range adds.
+  let currentFile = null;
+  let lineNo = 0;
+  for (const raw of git(["diff", "-U0", "--diff-filter=ACM", arg]).split("\n")) {
+    if (raw.startsWith("+++ b/")) {
+      currentFile = raw.slice(6);
+      continue;
+    }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(raw);
+    if (hunk) {
+      lineNo = Number(hunk[1]);
+      continue;
+    }
+    if (!raw.startsWith("+") || raw.startsWith("+++")) continue;
+    if (currentFile && !skipped(currentFile)) {
+      scan(raw.slice(1), `${currentFile}:${lineNo}`, findings);
+    }
+    lineNo++;
   }
   scan(git(["log", "--format=%B%n%an <%ae>", arg]), "commit messages", findings);
   scan(git(["rev-parse", "--abbrev-ref", "HEAD"]), "branch name", findings);
