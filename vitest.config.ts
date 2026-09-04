@@ -30,18 +30,22 @@ export default defineConfig({
        * red build green.
        */
       thresholds: {
-        statements: 73,
-        branches: 77,
-        functions: 93,
-        lines: 73,
+        statements: 84,
+        branches: 78,
+        functions: 95,
+        lines: 84,
 
         // Modules where a regression is a user-visible failure, held higher.
         "src/decisions.ts": { statements: 98, functions: 100 },
-        "src/telegram-api.ts": { statements: 85, functions: 88 },
+        "src/telegram-api.ts": { statements: 88, functions: 88 },
         "src/secret-ref-validation.ts": { statements: 100, functions: 100 },
         "src/allowlist.ts": { statements: 100, functions: 100 },
         "src/acp-bridge.ts": { statements: 75, functions: 90 },
         "src/adapter.ts": { statements: 100, functions: 100 },
+        // setup() is only reachable through the two-step boot in
+        // tests/worker-setup.test.ts; without a floor here that harness can rot
+        // away again without turning the build red, which is how it was lost.
+        "src/worker.ts": { statements: 75, functions: 90 },
       },
     },
   },
