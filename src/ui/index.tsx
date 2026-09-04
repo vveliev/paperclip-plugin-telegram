@@ -5,6 +5,7 @@ import {
   usePluginData,
   type PluginSettingsPageProps,
 } from "@paperclipai/plugin-sdk/ui";
+import { DEFAULT_CONFIG, decode as decodeTelegramConfig, type TelegramConfig } from "../config.js";
 
 type BoardAccessRegistration = {
   configured: boolean;
@@ -57,67 +58,60 @@ type CompanySecretSummary = {
   latestVersion?: number | null;
 };
 
-type TelegramRoutingConfig = {
-  defaultChatId: string;
-  topicRouting: boolean;
-  maxAgentsPerThread: number;
-  notifyOnIssueCreated: boolean;
-  notifyOnIssueDone: boolean;
-  notifyOnIssueAssigned: boolean;
-  onlyNotifyIfAssignedTo: string;
-  approvalsChatId: string;
-  approvalsTopicId: string;
-  notifyOnApprovalCreated: boolean;
-  onlyNotifyBoardApprovals: boolean;
-  errorsChatId: string;
-  errorsTopicId: string;
-  notifyOnAgentError: boolean;
-  notifyOnAgentRunStarted: boolean;
-  notifyOnAgentRunFinished: boolean;
-  activityChatId: string;
-  activityTopicId: string;
-  digestChatId: string;
-  digestTopicId: string;
-  digestMode: "off" | "daily" | "bidaily" | "tridaily";
-  dailyDigestTime: string;
-  bidailySecondTime: string;
-  tridailyTimes: string;
-};
+// Each settings-page section works with a subset of the one TelegramConfig
+// (config.ts) instead of an independently hand-typed shape, so a field
+// rename or type change there cannot silently drift out of sync here.
+type TelegramRoutingConfig = Pick<
+  TelegramConfig,
+  | "defaultChatId"
+  | "topicRouting"
+  | "maxAgentsPerThread"
+  | "notifyOnIssueCreated"
+  | "notifyOnIssueDone"
+  | "notifyOnIssueAssigned"
+  | "onlyNotifyIfAssignedTo"
+  | "approvalsChatId"
+  | "approvalsTopicId"
+  | "notifyOnApprovalCreated"
+  | "onlyNotifyBoardApprovals"
+  | "errorsChatId"
+  | "errorsTopicId"
+  | "notifyOnAgentError"
+  | "notifyOnAgentRunStarted"
+  | "notifyOnAgentRunFinished"
+  | "activityChatId"
+  | "activityTopicId"
+  | "digestChatId"
+  | "digestTopicId"
+  | "digestMode"
+  | "dailyDigestTime"
+  | "bidailySecondTime"
+  | "tridailyTimes"
+>;
 
-type TelegramConnectionConfig = {
-  telegramBotTokenRef: string;
-  paperclipBaseUrl: string;
-  paperclipPublicUrl: string;
-};
+type TelegramConnectionConfig = Pick<
+  TelegramConfig,
+  "telegramBotTokenRef" | "paperclipBaseUrl" | "paperclipPublicUrl"
+>;
 
-type TelegramBoardConfig = {
-  paperclipBoardApiTokenRef: string;
-};
+type TelegramBoardConfig = Pick<TelegramConfig, "paperclipBoardApiTokenRef">;
 
-type TelegramAccessConfig = {
-  enableCommands: boolean;
-  enableInbound: boolean;
-  allowedTelegramUserIds: string[];
-  allowedTelegramChatIds: string[];
-};
+type TelegramAccessConfig = Pick<
+  TelegramConfig,
+  "enableCommands" | "enableInbound" | "allowedTelegramUserIds" | "allowedTelegramChatIds"
+>;
 
-type TelegramMediaConfig = {
-  transcriptionApiKeyRef: string;
-  briefAgentId: string;
-  briefAgentChatIds: string[];
-};
+type TelegramMediaConfig = Pick<TelegramConfig, "transcriptionApiKeyRef" | "briefAgentId" | "briefAgentChatIds">;
 
-type TelegramEscalationConfig = {
-  escalationChatId: string;
-  escalationTimeoutMs: number;
-  escalationDefaultAction: "defer" | "auto_reply" | "close";
-  escalationHoldMessage: string;
-};
+type TelegramEscalationConfig = Pick<
+  TelegramConfig,
+  "escalationChatId" | "escalationTimeoutMs" | "escalationDefaultAction" | "escalationHoldMessage"
+>;
 
-type TelegramProactiveConfig = {
-  maxSuggestionsPerHourPerCompany: number;
-  watchDeduplicationWindowMs: number;
-};
+type TelegramProactiveConfig = Pick<
+  TelegramConfig,
+  "maxSuggestionsPerHourPerCompany" | "watchDeduplicationWindowMs"
+>;
 
 type PluginConfigResponse = {
   configJson?: Record<string, unknown> | null;
@@ -126,65 +120,65 @@ type PluginConfigResponse = {
 const TELEGRAM_PLUGIN_ID = "paperclip-plugin-telegram";
 
 const DEFAULT_ROUTING_CONFIG: TelegramRoutingConfig = {
-  defaultChatId: "",
-  topicRouting: false,
-  maxAgentsPerThread: 5,
-  notifyOnIssueCreated: true,
-  notifyOnIssueDone: true,
-  notifyOnIssueAssigned: false,
-  onlyNotifyIfAssignedTo: "",
-  approvalsChatId: "",
-  approvalsTopicId: "",
-  notifyOnApprovalCreated: true,
-  onlyNotifyBoardApprovals: false,
-  errorsChatId: "",
-  errorsTopicId: "",
-  notifyOnAgentError: true,
-  notifyOnAgentRunStarted: false,
-  notifyOnAgentRunFinished: false,
-  activityChatId: "",
-  activityTopicId: "",
-  digestChatId: "",
-  digestTopicId: "",
-  digestMode: "off",
-  dailyDigestTime: "09:00",
-  bidailySecondTime: "17:00",
-  tridailyTimes: "07:00,13:00,19:00",
+  defaultChatId: DEFAULT_CONFIG.defaultChatId,
+  topicRouting: DEFAULT_CONFIG.topicRouting,
+  maxAgentsPerThread: DEFAULT_CONFIG.maxAgentsPerThread,
+  notifyOnIssueCreated: DEFAULT_CONFIG.notifyOnIssueCreated,
+  notifyOnIssueDone: DEFAULT_CONFIG.notifyOnIssueDone,
+  notifyOnIssueAssigned: DEFAULT_CONFIG.notifyOnIssueAssigned,
+  onlyNotifyIfAssignedTo: DEFAULT_CONFIG.onlyNotifyIfAssignedTo,
+  approvalsChatId: DEFAULT_CONFIG.approvalsChatId,
+  approvalsTopicId: DEFAULT_CONFIG.approvalsTopicId,
+  notifyOnApprovalCreated: DEFAULT_CONFIG.notifyOnApprovalCreated,
+  onlyNotifyBoardApprovals: DEFAULT_CONFIG.onlyNotifyBoardApprovals,
+  errorsChatId: DEFAULT_CONFIG.errorsChatId,
+  errorsTopicId: DEFAULT_CONFIG.errorsTopicId,
+  notifyOnAgentError: DEFAULT_CONFIG.notifyOnAgentError,
+  notifyOnAgentRunStarted: DEFAULT_CONFIG.notifyOnAgentRunStarted,
+  notifyOnAgentRunFinished: DEFAULT_CONFIG.notifyOnAgentRunFinished,
+  activityChatId: DEFAULT_CONFIG.activityChatId,
+  activityTopicId: DEFAULT_CONFIG.activityTopicId,
+  digestChatId: DEFAULT_CONFIG.digestChatId,
+  digestTopicId: DEFAULT_CONFIG.digestTopicId,
+  digestMode: DEFAULT_CONFIG.digestMode,
+  dailyDigestTime: DEFAULT_CONFIG.dailyDigestTime,
+  bidailySecondTime: DEFAULT_CONFIG.bidailySecondTime,
+  tridailyTimes: DEFAULT_CONFIG.tridailyTimes,
 };
 
 const DEFAULT_CONNECTION_CONFIG: TelegramConnectionConfig = {
-  telegramBotTokenRef: "",
-  paperclipBaseUrl: "http://localhost:3100",
-  paperclipPublicUrl: "",
+  telegramBotTokenRef: DEFAULT_CONFIG.telegramBotTokenRef,
+  paperclipBaseUrl: DEFAULT_CONFIG.paperclipBaseUrl,
+  paperclipPublicUrl: DEFAULT_CONFIG.paperclipPublicUrl,
 };
 
 const DEFAULT_BOARD_CONFIG: TelegramBoardConfig = {
-  paperclipBoardApiTokenRef: "",
+  paperclipBoardApiTokenRef: DEFAULT_CONFIG.paperclipBoardApiTokenRef,
 };
 
 const DEFAULT_ACCESS_CONFIG: TelegramAccessConfig = {
-  enableCommands: true,
-  enableInbound: true,
-  allowedTelegramUserIds: [],
-  allowedTelegramChatIds: [],
+  enableCommands: DEFAULT_CONFIG.enableCommands,
+  enableInbound: DEFAULT_CONFIG.enableInbound,
+  allowedTelegramUserIds: DEFAULT_CONFIG.allowedTelegramUserIds,
+  allowedTelegramChatIds: DEFAULT_CONFIG.allowedTelegramChatIds,
 };
 
 const DEFAULT_MEDIA_CONFIG: TelegramMediaConfig = {
-  transcriptionApiKeyRef: "",
-  briefAgentId: "",
-  briefAgentChatIds: [],
+  transcriptionApiKeyRef: DEFAULT_CONFIG.transcriptionApiKeyRef,
+  briefAgentId: DEFAULT_CONFIG.briefAgentId,
+  briefAgentChatIds: DEFAULT_CONFIG.briefAgentChatIds,
 };
 
 const DEFAULT_ESCALATION_CONFIG: TelegramEscalationConfig = {
-  escalationChatId: "",
-  escalationTimeoutMs: 900000,
-  escalationDefaultAction: "defer",
-  escalationHoldMessage: "Let me check on that - I'll get back to you shortly.",
+  escalationChatId: DEFAULT_CONFIG.escalationChatId,
+  escalationTimeoutMs: DEFAULT_CONFIG.escalationTimeoutMs,
+  escalationDefaultAction: DEFAULT_CONFIG.escalationDefaultAction,
+  escalationHoldMessage: DEFAULT_CONFIG.escalationHoldMessage,
 };
 
 const DEFAULT_PROACTIVE_CONFIG: TelegramProactiveConfig = {
-  maxSuggestionsPerHourPerCompany: 10,
-  watchDeduplicationWindowMs: 86400000,
+  maxSuggestionsPerHourPerCompany: DEFAULT_CONFIG.maxSuggestionsPerHourPerCompany,
+  watchDeduplicationWindowMs: DEFAULT_CONFIG.watchDeduplicationWindowMs,
 };
 
 const standardInputStyle = {
@@ -218,135 +212,89 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function asString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function asBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function asNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
-}
-
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
-    : [];
-}
-
-function asDigestMode(value: unknown): TelegramRoutingConfig["digestMode"] {
-  return value === "daily" || value === "bidaily" || value === "tridaily" ? value : "off";
-}
-
-function asEscalationDefaultAction(value: unknown): TelegramEscalationConfig["escalationDefaultAction"] {
-  return value === "auto_reply" || value === "close" ? value : "defer";
-}
+// Coercion of raw host config into typed values happens once, in
+// config.ts's decode() — these functions just group the result for each
+// settings-page section instead of re-deciding what a valid value is.
 
 function extractRoutingConfig(config: Record<string, unknown>): TelegramRoutingConfig {
+  const decoded = decodeTelegramConfig(config);
   return {
-    defaultChatId: asString(config.defaultChatId),
-    topicRouting: asBoolean(config.topicRouting, DEFAULT_ROUTING_CONFIG.topicRouting),
-    maxAgentsPerThread: asNumber(config.maxAgentsPerThread, DEFAULT_ROUTING_CONFIG.maxAgentsPerThread),
-    notifyOnIssueCreated: asBoolean(
-      config.notifyOnIssueCreated,
-      DEFAULT_ROUTING_CONFIG.notifyOnIssueCreated,
-    ),
-    notifyOnIssueDone: asBoolean(
-      config.notifyOnIssueDone,
-      DEFAULT_ROUTING_CONFIG.notifyOnIssueDone,
-    ),
-    notifyOnIssueAssigned: asBoolean(
-      config.notifyOnIssueAssigned,
-      DEFAULT_ROUTING_CONFIG.notifyOnIssueAssigned,
-    ),
-    onlyNotifyIfAssignedTo: asString(config.onlyNotifyIfAssignedTo),
-    approvalsChatId: asString(config.approvalsChatId),
-    approvalsTopicId: asString(config.approvalsTopicId),
-    notifyOnApprovalCreated: asBoolean(
-      config.notifyOnApprovalCreated,
-      DEFAULT_ROUTING_CONFIG.notifyOnApprovalCreated,
-    ),
-    onlyNotifyBoardApprovals: asBoolean(
-      config.onlyNotifyBoardApprovals,
-      DEFAULT_ROUTING_CONFIG.onlyNotifyBoardApprovals,
-    ),
-    errorsChatId: asString(config.errorsChatId),
-    errorsTopicId: asString(config.errorsTopicId),
-    notifyOnAgentError: asBoolean(
-      config.notifyOnAgentError,
-      DEFAULT_ROUTING_CONFIG.notifyOnAgentError,
-    ),
-    notifyOnAgentRunStarted: asBoolean(
-      config.notifyOnAgentRunStarted,
-      DEFAULT_ROUTING_CONFIG.notifyOnAgentRunStarted,
-    ),
-    notifyOnAgentRunFinished: asBoolean(
-      config.notifyOnAgentRunFinished,
-      DEFAULT_ROUTING_CONFIG.notifyOnAgentRunFinished,
-    ),
-    activityChatId: asString(config.activityChatId),
-    activityTopicId: asString(config.activityTopicId),
-    digestChatId: asString(config.digestChatId),
-    digestTopicId: asString(config.digestTopicId),
-    digestMode: asDigestMode(config.digestMode),
-    dailyDigestTime: asString(config.dailyDigestTime) || DEFAULT_ROUTING_CONFIG.dailyDigestTime,
-    bidailySecondTime: asString(config.bidailySecondTime) || DEFAULT_ROUTING_CONFIG.bidailySecondTime,
-    tridailyTimes: asString(config.tridailyTimes) || DEFAULT_ROUTING_CONFIG.tridailyTimes,
+    defaultChatId: decoded.defaultChatId,
+    topicRouting: decoded.topicRouting,
+    maxAgentsPerThread: decoded.maxAgentsPerThread,
+    notifyOnIssueCreated: decoded.notifyOnIssueCreated,
+    notifyOnIssueDone: decoded.notifyOnIssueDone,
+    notifyOnIssueAssigned: decoded.notifyOnIssueAssigned,
+    onlyNotifyIfAssignedTo: decoded.onlyNotifyIfAssignedTo,
+    approvalsChatId: decoded.approvalsChatId,
+    approvalsTopicId: decoded.approvalsTopicId,
+    notifyOnApprovalCreated: decoded.notifyOnApprovalCreated,
+    onlyNotifyBoardApprovals: decoded.onlyNotifyBoardApprovals,
+    errorsChatId: decoded.errorsChatId,
+    errorsTopicId: decoded.errorsTopicId,
+    notifyOnAgentError: decoded.notifyOnAgentError,
+    notifyOnAgentRunStarted: decoded.notifyOnAgentRunStarted,
+    notifyOnAgentRunFinished: decoded.notifyOnAgentRunFinished,
+    activityChatId: decoded.activityChatId,
+    activityTopicId: decoded.activityTopicId,
+    digestChatId: decoded.digestChatId,
+    digestTopicId: decoded.digestTopicId,
+    digestMode: decoded.digestMode,
+    dailyDigestTime: decoded.dailyDigestTime,
+    bidailySecondTime: decoded.bidailySecondTime,
+    tridailyTimes: decoded.tridailyTimes,
   };
 }
 
 function extractConnectionConfig(config: Record<string, unknown>): TelegramConnectionConfig {
+  const decoded = decodeTelegramConfig(config);
   return {
-    telegramBotTokenRef: asString(config.telegramBotTokenRef),
-    paperclipBaseUrl: asString(config.paperclipBaseUrl) || DEFAULT_CONNECTION_CONFIG.paperclipBaseUrl,
-    paperclipPublicUrl: asString(config.paperclipPublicUrl),
+    telegramBotTokenRef: decoded.telegramBotTokenRef,
+    paperclipBaseUrl: decoded.paperclipBaseUrl,
+    paperclipPublicUrl: decoded.paperclipPublicUrl,
   };
 }
 
 function extractBoardConfig(config: Record<string, unknown>): TelegramBoardConfig {
   return {
-    paperclipBoardApiTokenRef: asString(config.paperclipBoardApiTokenRef),
+    paperclipBoardApiTokenRef: decodeTelegramConfig(config).paperclipBoardApiTokenRef,
   };
 }
 
 function extractAccessConfig(config: Record<string, unknown>): TelegramAccessConfig {
+  const decoded = decodeTelegramConfig(config);
   return {
-    enableCommands: asBoolean(config.enableCommands, DEFAULT_ACCESS_CONFIG.enableCommands),
-    enableInbound: asBoolean(config.enableInbound, DEFAULT_ACCESS_CONFIG.enableInbound),
-    allowedTelegramUserIds: asStringArray(config.allowedTelegramUserIds),
-    allowedTelegramChatIds: asStringArray(config.allowedTelegramChatIds),
+    enableCommands: decoded.enableCommands,
+    enableInbound: decoded.enableInbound,
+    allowedTelegramUserIds: decoded.allowedTelegramUserIds,
+    allowedTelegramChatIds: decoded.allowedTelegramChatIds,
   };
 }
 
 function extractMediaConfig(config: Record<string, unknown>): TelegramMediaConfig {
+  const decoded = decodeTelegramConfig(config);
   return {
-    transcriptionApiKeyRef: asString(config.transcriptionApiKeyRef),
-    briefAgentId: asString(config.briefAgentId),
-    briefAgentChatIds: asStringArray(config.briefAgentChatIds),
+    transcriptionApiKeyRef: decoded.transcriptionApiKeyRef,
+    briefAgentId: decoded.briefAgentId,
+    briefAgentChatIds: decoded.briefAgentChatIds,
   };
 }
 
 function extractEscalationConfig(config: Record<string, unknown>): TelegramEscalationConfig {
+  const decoded = decodeTelegramConfig(config);
   return {
-    escalationChatId: asString(config.escalationChatId),
-    escalationTimeoutMs: asNumber(config.escalationTimeoutMs, DEFAULT_ESCALATION_CONFIG.escalationTimeoutMs),
-    escalationDefaultAction: asEscalationDefaultAction(config.escalationDefaultAction),
-    escalationHoldMessage: asString(config.escalationHoldMessage) || DEFAULT_ESCALATION_CONFIG.escalationHoldMessage,
+    escalationChatId: decoded.escalationChatId,
+    escalationTimeoutMs: decoded.escalationTimeoutMs,
+    escalationDefaultAction: decoded.escalationDefaultAction,
+    escalationHoldMessage: decoded.escalationHoldMessage,
   };
 }
 
 function extractProactiveConfig(config: Record<string, unknown>): TelegramProactiveConfig {
+  const decoded = decodeTelegramConfig(config);
   return {
-    maxSuggestionsPerHourPerCompany: asNumber(
-      config.maxSuggestionsPerHourPerCompany,
-      DEFAULT_PROACTIVE_CONFIG.maxSuggestionsPerHourPerCompany,
-    ),
-    watchDeduplicationWindowMs: asNumber(
-      config.watchDeduplicationWindowMs,
-      DEFAULT_PROACTIVE_CONFIG.watchDeduplicationWindowMs,
-    ),
+    maxSuggestionsPerHourPerCompany: decoded.maxSuggestionsPerHourPerCompany,
+    watchDeduplicationWindowMs: decoded.watchDeduplicationWindowMs,
   };
 }
 

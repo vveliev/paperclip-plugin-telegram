@@ -9,54 +9,8 @@ export const PLUGIN_ID = "paperclip-plugin-telegram";
 export const PLUGIN_VERSION = "0.8.1";
 export const MAX_AGENTS_PER_THREAD = 5;
 
-export const DEFAULT_CONFIG = {
-  telegramBotTokenRef: "",
-  defaultChatId: "",
-  approvalsChatId: "",
-  approvalsTopicId: "",
-  errorsChatId: "",
-  errorsTopicId: "",
-  // Routine, FYI-only notices (issue created/done/assigned, agent run
-  // started/finished) route here instead of the default chat when set, so
-  // they don't bury approvals and errors in the same stream (BLA-618).
-  activityChatId: "",
-  activityTopicId: "",
-  digestChatId: "",
-  digestTopicId: "",
-  paperclipBaseUrl: "http://localhost:3100",
-  paperclipBoardApiTokenRef: "",
-  paperclipPublicUrl: "",
-  notifyOnIssueCreated: true,
-  notifyOnIssueDone: true,
-  notifyOnIssueAssigned: false,
-  onlyNotifyIfAssignedTo: "",
-  notifyOnApprovalCreated: true,
-  onlyNotifyBoardApprovals: false,
-  notifyOnAgentError: true,
-  notifyOnAgentRunStarted: false,
-  notifyOnAgentRunFinished: false,
-  enableCommands: true,
-  enableInbound: true,
-  allowedTelegramUserIds: [] as string[],
-  allowedTelegramChatIds: [] as string[],
-  digestMode: "off" as "off" | "daily" | "bidaily" | "tridaily",
-  dailyDigestTime: "09:00",
-  bidailySecondTime: "17:00",
-  tridailyTimes: "07:00,13:00,19:00",
-  topicRouting: false,
-  maxAgentsPerThread: MAX_AGENTS_PER_THREAD,
-  escalationChatId: "",
-  escalationTimeoutMs: 900000,
-  escalationDefaultAction: "defer",
-  escalationHoldMessage: "Let me check on that - I'll get back to you shortly.",
-  // Phase 3: Media Pipeline
-  briefAgentId: "",
-  briefAgentChatIds: [] as string[],
-  transcriptionApiKeyRef: "",
-  // Phase 5: Proactive Suggestions
-  maxSuggestionsPerHourPerCompany: 10,
-  watchDeduplicationWindowMs: 86400000, // 24h
-} as const;
+// The plugin's config type, defaults, and decoding live in ./config.ts —
+// that is the one place those three agree.
 
 export const AGENT_ERROR_DEDUPLICATION_WINDOW_MS = 30 * 60 * 1000;
 
