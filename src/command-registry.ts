@@ -120,9 +120,16 @@ function approvalStateKey(approvalId: string): string {
 
 // --- Built-in commands ---
 
-const BUILTIN_COMMANDS = new Set([
-  "status", "issues", "agents", "approve", "help", "settings",
-  "connect", "connect_topic", "topics", "acp", "commands",
+// Every name `handleCommand` (commands.ts) dispatches on, plus "commands"
+// itself (handled in worker.ts before this set is even consulted). Drift
+// between this set and the dispatcher is exactly the bug GIF-149 fixed: a
+// name dispatchable but missing here can be imported as a custom command and
+// permanently shadow the real handler. tests/command-registry.test.ts
+// enforces this set stays in sync with the switch in commands.ts.
+export const BUILTIN_COMMANDS = new Set([
+  "create", "decisions", "status", "issues", "agents", "approve",
+  "start", "help", "settings", "keyboard", "connect", "connect_topic",
+  "topics", "acp", "commands",
 ]);
 
 // --- Command registry ---
