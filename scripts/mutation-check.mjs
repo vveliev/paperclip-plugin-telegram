@@ -179,12 +179,12 @@ const MUTATIONS = [
     file: "src/acp-bridge.ts",
     breaks:
       "An agent-to-agent discussion continues with an unresolved company, re-spending the failure on every remaining turn instead of pausing once.",
-    find: `        const link = await lookupCompanyLink(ctx, chatId);
-        if (!link.linked) {
-          // Pausing beats continuing: this runs once per turn, so an unresolved`,
-    replace: `        const link = await lookupCompanyLink(ctx, chatId);
-        if (false) {
-          // Pausing beats continuing: this runs once per turn, so an unresolved`,
+    find: `      const link = await companyForChat(ctx, chatId, companyId);
+      if (!link.linked) {
+        // Pausing beats continuing: this runs once per turn, so an unresolved`,
+    replace: `      const link = await companyForChat(ctx, chatId, companyId);
+      if (false) {
+        // Pausing beats continuing: this runs once per turn, so an unresolved`,
   },
   {
     id: "route-message-unlinked",
