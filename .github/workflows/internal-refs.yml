@@ -50,7 +50,13 @@ jobs:
       - name: Scan changed content for internal references
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          # A newly pushed branch reports an all-zero "before". Scanning from
+          # the root commit would then re-flag every pre-existing reference and
+          # fail on day one, so fall back to the merge-base with the default
+          # branch: what this branch ADDS is the thing being published.
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-            BASE="$(git rev-list --max-parents=0 HEAD | tail -1)"
+            git fetch --no-tags origin "${{ github.event.repository.default_branch }}" || true
+            BASE="$(git merge-base HEAD FETCH_HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -1)"
           fi
+          echo "scanning $BASE..HEAD"
           node scripts/check-internal-refs.mjs --range "$BASE..HEAD"
