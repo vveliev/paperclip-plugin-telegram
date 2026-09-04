@@ -57,6 +57,9 @@ function mockCtx(): PluginContext {
       set: vi.fn(async (key: { stateKey: string }, value: unknown) => {
         stateStore[key.stateKey] = value;
       }),
+      delete: vi.fn(async (key: { stateKey: string }) => {
+        delete stateStore[key.stateKey];
+      }),
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     config: { get: vi.fn().mockResolvedValue({}) },
@@ -70,11 +73,11 @@ function seedCommand(companyId = "co-1") {
   stateStore[`commands_${companyId}`] = [COMMAND];
 }
 
-/** The approval id embedded in the Approve button we just sent. */
+/** The approval id (park key) embedded in the Approve button we just sent. */
 function approvalIdFromButtons(): string {
   const withButtons = sentMessages.find((m) => m.options?.inlineKeyboard);
   const kb = withButtons!.options!.inlineKeyboard as Array<Array<{ callback_data: string }>>;
-  return kb[0][0].callback_data.replace("cmd_approve_", "");
+  return kb[0][0].callback_data.split(":")[2];
 }
 
 beforeEach(() => {
@@ -128,7 +131,7 @@ describe("wait_approval gate", () => {
     await tryCustomCommand(ctx, "tok", "chat-1", "deploy", "", undefined, "co-1");
     const id = approvalIdFromButtons();
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:approve`, "cbq-1", "vagif", 55);
 
     expect(sentMessages.map((m) => m.text)).toContain("SHIPPED");
     expect(answeredCallbacks).toContain("Approved");
@@ -140,7 +143,7 @@ describe("wait_approval gate", () => {
     await tryCustomCommand(ctx, "tok", "chat-1", "deploy", "", undefined, "co-1");
     const id = approvalIdFromButtons();
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_reject_${id}`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:reject`, "cbq-1", "vagif", 55);
 
     expect(sentMessages.map((m) => m.text)).not.toContain("SHIPPED");
     expect(answeredCallbacks).toContain("Rejected");
@@ -154,8 +157,8 @@ describe("wait_approval gate", () => {
     await tryCustomCommand(ctx, "tok", "chat-1", "deploy", "", undefined, "co-1");
     const id = approvalIdFromButtons();
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-1", "vagif", 55);
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-2", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:approve`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:approve`, "cbq-2", "vagif", 55);
 
     expect(sentMessages.filter((m) => m.text === "SHIPPED")).toHaveLength(1);
     expect(answeredCallbacks).toContain("This approval is no longer pending.");
@@ -167,8 +170,8 @@ describe("wait_approval gate", () => {
     await tryCustomCommand(ctx, "tok", "chat-1", "deploy", "", undefined, "co-1");
     const id = approvalIdFromButtons();
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_reject_${id}`, "cbq-1", "vagif", 55);
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-2", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:reject`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:approve`, "cbq-2", "vagif", 55);
 
     expect(sentMessages.map((m) => m.text)).not.toContain("SHIPPED");
   });
@@ -176,7 +179,7 @@ describe("wait_approval gate", () => {
   it("says so rather than going quiet when the approval is unknown", async () => {
     const ctx = mockCtx();
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", "cmd_approve_never-existed", "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", "pk:wapp:never-existed:approve", "cbq-1", "vagif", 55);
 
     expect(answeredCallbacks).toContain("This approval is no longer pending.");
   });
@@ -188,7 +191,7 @@ describe("wait_approval gate", () => {
     const id = approvalIdFromButtons();
     stateStore["commands_co-1"] = [];
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:approve`, "cbq-1", "vagif", 55);
 
     expect(sentMessages.some((m) => m.text.includes("no longer exists"))).toBe(true);
   });
@@ -199,7 +202,7 @@ describe("wait_approval gate", () => {
     await tryCustomCommand(ctx, "tok", "chat-1", "deploy", "", undefined, "co-1");
     const id = approvalIdFromButtons();
 
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${id}`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${id}:approve`, "cbq-1", "vagif", 55);
 
     expect(editedMessages[0].text).toContain("vagif");
   });
@@ -218,7 +221,7 @@ describe("wait_approval gate", () => {
 
     await tryCustomCommand(ctx, "tok", "chat-1", "twogates", "", undefined, "co-1");
     const first = approvalIdFromButtons();
-    await resolveWorkflowApprovalCallback(ctx, "tok", `cmd_approve_${first}`, "cbq-1", "vagif", 55);
+    await resolveWorkflowApprovalCallback(ctx, "tok", `pk:wapp:${first}:approve`, "cbq-1", "vagif", 55);
 
     const ids = sentMessages
       .filter((m) => m.options?.inlineKeyboard)
@@ -229,15 +232,15 @@ describe("wait_approval gate", () => {
 
 describe("isWorkflowApprovalCallback", () => {
   it("claims its own callbacks", () => {
-    expect(isWorkflowApprovalCallback("cmd_approve_123")).toBe(true);
-    expect(isWorkflowApprovalCallback("cmd_reject_123")).toBe(true);
+    expect(isWorkflowApprovalCallback("pk:wapp:123:approve")).toBe(true);
+    expect(isWorkflowApprovalCallback("pk:wapp:123:reject")).toBe(true);
   });
 
   it("does not claim the host approval callbacks it sits next to", () => {
-    // worker.ts routes on prefixes; claiming "approve_" here would swallow the
-    // Paperclip approval flow entirely.
-    expect(isWorkflowApprovalCallback("approve_abc")).toBe(false);
-    expect(isWorkflowApprovalCallback("esc_1_2")).toBe(false);
-    expect(isWorkflowApprovalCallback("ia:answer:x")).toBe(false);
+    // worker.ts dispatches on the decoded flow tag; claiming "apr" here would
+    // swallow the Paperclip approval flow entirely.
+    expect(isWorkflowApprovalCallback("pk:apr:abc:approve")).toBe(false);
+    expect(isWorkflowApprovalCallback("pk:esc:1:reply")).toBe(false);
+    expect(isWorkflowApprovalCallback("pk:ask:x:accept")).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { sendMessage, escapeMarkdownV2, sendChatAction, answerCallbackQuery, edi
 import { METRIC_NAMES } from "./constants.js";
 import { validateCommandDefinition } from "./command-definition-validation.js";
 import { BUILTIN_COMMAND_NAMES } from "./commands.js";
+import { park, unpark, clear, encodeCallback, decodeCallback } from "./parked-interactions.js";
 
 // --- Types ---
 
@@ -80,14 +81,11 @@ type StepResult = {
 
 /**
  * Returned by a `wait_approval` step to tell executeWorkflow to stop and park.
- * Carries the approval id so the continuation is stored under the same key the
- * buttons will send back.
+ * Carries the interpolated prompt text — the park itself (and the key the
+ * buttons send back) is created by executeWorkflow, which is the only layer
+ * that knows the continuation (results so far, next step index).
  */
 const AWAITING_APPROVAL_PREFIX = "__awaiting_approval__:";
-
-/** Callback data prefixes for the two buttons a wait_approval step sends. */
-const APPROVE_PREFIX = "cmd_approve_";
-const REJECT_PREFIX = "cmd_reject_";
 
 /**
  * Everything needed to restart a workflow at the step after its approval gate.
@@ -95,9 +93,8 @@ const REJECT_PREFIX = "cmd_reject_";
  * Telegram processes updates strictly sequentially, so a step cannot await a
  * button press — the press arrives as a later update that cannot be handled
  * while the loop is blocked. The workflow therefore stops here and the
- * continuation is resolved from the callback handler, the same stateless shape
- * /decisions uses. Nothing secret is stored: the bot token is re-resolved when
- * the callback arrives.
+ * continuation is resolved from the callback handler, the same park/resume
+ * shape every other parked Telegram flow uses (see parked-interactions.ts).
  */
 type ParkedWorkflow = {
   commandName: string;
@@ -108,16 +105,7 @@ type ParkedWorkflow = {
   messageThreadId?: number;
   companyId: string;
   createdAt: number;
-  // Set in place of deleting the row outright: writing a JS `null` value hits
-  // a NOT NULL constraint on plugin_state.value_json at the platform layer
-  // (BLA-606) and throws before either Telegram call below ever runs, so the
-  // button silently does nothing. A sentinel object keeps the write valid.
-  resolved?: boolean;
 };
-
-function approvalStateKey(approvalId: string): string {
-  return `cmd_approval_${approvalId}`;
-}
 
 // --- Command registry ---
 
@@ -373,7 +361,7 @@ async function executeWorkflow(
       // steps the gate exists to hold back — which is what this used to do,
       // making the Approve button decorative.
       if (typeof result === "string" && result.startsWith(AWAITING_APPROVAL_PREFIX)) {
-        const approvalId = result.slice(AWAITING_APPROVAL_PREFIX.length);
+        const prompt = result.slice(AWAITING_APPROVAL_PREFIX.length);
         const parked: ParkedWorkflow = {
           commandName: cmd.name,
           args,
@@ -384,14 +372,24 @@ async function executeWorkflow(
           companyId,
           createdAt: Date.now(),
         };
-        await ctx.state.set(
-          { scopeKind: "instance", stateKey: approvalStateKey(approvalId) },
-          parked,
-        );
+        const ttlMs = step.type === "wait_approval" ? step.timeoutMs : undefined;
+        const key = await park(ctx, "wapp", parked, ttlMs ? { ttlMs } : undefined);
+        // plain: an admin-authored template with user-argument interpolation,
+        // not this plugin's own copy — not escaped for MarkdownV2.
+        await sendMessage(ctx, token, chatId, prompt, {
+          parseMode: undefined,
+          messageThreadId,
+          inlineKeyboard: [
+            [
+              { text: "Approve", callback_data: encodeCallback("wapp", key, "approve") },
+              { text: "Reject", callback_data: encodeCallback("wapp", key, "reject") },
+            ],
+          ],
+        });
         ctx.logger.info("Workflow parked awaiting approval", {
           command: cmd.name,
           stepId: step.id,
-          approvalId,
+          key,
         });
         return;
       }
@@ -499,26 +497,11 @@ async function executeStep(
 
     case "wait_approval": {
       const prompt = interpolate(step.prompt);
-      // Unique per step within a run: Date.now() alone collides when two steps
-      // park in the same millisecond, and a collision would resume the wrong
-      // continuation.
-      const approvalId = `${Date.now()}_${step.id}`;
-      // plain: an admin-authored template with user-argument interpolation,
-      // not this plugin's own copy — not escaped for MarkdownV2.
-      await sendMessage(ctx, token, chatId, prompt, {
-        parseMode: undefined,
-        messageThreadId,
-        inlineKeyboard: [
-          [
-            { text: "Approve", callback_data: `${APPROVE_PREFIX}${approvalId}` },
-            { text: "Reject", callback_data: `${REJECT_PREFIX}${approvalId}` },
-          ],
-        ],
-      });
-      // executeWorkflow stores the continuation under this id and stops. The
-      // state is written there rather than here because only the loop knows
-      // which step comes next.
-      return `${AWAITING_APPROVAL_PREFIX}${approvalId}`;
+      // executeWorkflow parks the continuation and sends the prompt with its
+      // buttons — only the loop knows which step comes next, and the park key
+      // (allocated by parked-interactions.ts) has to exist before the buttons
+      // that carry it can be built.
+      return `${AWAITING_APPROVAL_PREFIX}${prompt}`;
     }
 
     // NOTE: there is deliberately no "choice" step that blocks inline.
@@ -551,17 +534,22 @@ async function executeStep(
 
 /** True for the two callbacks a wait_approval step's buttons send back. */
 export function isWorkflowApprovalCallback(data: string): boolean {
-  return data.startsWith(APPROVE_PREFIX) || data.startsWith(REJECT_PREFIX);
+  const decoded = decodeCallback(data);
+  return decoded?.flow === "wapp" && (decoded.action === "approve" || decoded.action === "reject");
 }
 
 /**
  * Resume or abandon a workflow parked at an approval gate.
  *
- * The parked state is deleted before the remaining steps run. That ordering is
+ * The parked state is deleted (via `clear`, never a null write — see
+ * parked-interactions.ts) before the remaining steps run. That ordering is
  * the point: it makes a second press of the same button a no-op instead of
  * running the tail of the workflow twice. Telegram leaves the buttons on screen
  * and re-delivers callbacks it considers unacknowledged, so a double press is
- * the expected case, not the unlucky one.
+ * the expected case, not the unlucky one. A press after the gate has expired
+ * (or a stale key from before this plugin persisted continuations) reports
+ * the identical "no longer pending" message — the two are indistinguishable
+ * to the user and neither is actionable.
  */
 export async function resolveWorkflowApprovalCallback(
   ctx: PluginContext,
@@ -571,23 +559,20 @@ export async function resolveWorkflowApprovalCallback(
   actor: string,
   messageId?: number,
 ): Promise<void> {
-  const approved = data.startsWith(APPROVE_PREFIX);
-  const approvalId = data.slice((approved ? APPROVE_PREFIX : REJECT_PREFIX).length);
-  const stateKey = approvalStateKey(approvalId);
+  const decoded = decodeCallback(data);
+  if (!decoded || decoded.flow !== "wapp") return;
+  const approved = decoded.action === "approve";
 
-  const parked = await ctx.state.get({
-    scopeKind: "instance",
-    stateKey,
-  }) as ParkedWorkflow | null;
-
-  if (!parked || parked.resolved) {
-    // Already decided, or from a build before the continuation was persisted.
-    // Saying so beats silence, which would read as the button doing nothing.
+  const result = await unpark<ParkedWorkflow>(ctx, "wapp", decoded.key);
+  if (result.status !== "live") {
+    // Already decided, expired, or from a build before the continuation was
+    // persisted. Saying so beats silence, which would read as the button
+    // doing nothing.
     await answerCallbackQuery(ctx, token, callbackQueryId, "This approval is no longer pending.");
     return;
   }
-
-  await ctx.state.set({ scopeKind: "instance", stateKey }, { ...parked, resolved: true });
+  await clear(ctx, "wapp", decoded.key);
+  const parked = result.payload;
 
   if (!approved) {
     await answerCallbackQuery(ctx, token, callbackQueryId, "Rejected");
@@ -596,7 +581,7 @@ export async function resolveWorkflowApprovalCallback(
     }
     ctx.logger.info("Workflow rejected at approval gate", {
       command: parked.commandName,
-      approvalId,
+      key: decoded.key,
       actor,
     });
     return;

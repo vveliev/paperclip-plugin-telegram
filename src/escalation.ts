@@ -2,6 +2,7 @@ import type { PluginContext } from "@paperclipai/plugin-sdk";
 import { sendMessage, editMessage, escapeMarkdownV2, truncateAtWord } from "./telegram-api.js";
 import { wakeAgentWithIssue } from "./acp-bridge.js";
 import { AGENT_ERROR_TRUNCATE_LENGTH, TRUNCATE_MEDIUM } from "./constants.js";
+import { park, unpark, clear, listExpired, encodeCallback } from "./parked-interactions.js";
 
 export type EscalationReason =
   | "low_confidence"
@@ -54,9 +55,9 @@ type StoredEscalation = {
   originMessageId?: string;
   escalationChatId: string;
   escalationMessageId: string;
-  status: "pending" | "resolved" | "timed_out";
-  createdAt: string;
-  timeoutAt: string;
+  // No `status` field: liveness is "the park exists" (parked-interactions.ts
+  // owns that rule). Resolving or timing out clears the row instead of
+  // flipping a sentinel next to a row that sits in `plugin_state` forever.
   defaultAction: "defer" | "auto_reply" | "close";
   transport?: "native" | "acp";
   sessionId?: string;
@@ -109,16 +110,20 @@ export class EscalationManager {
     lines.push("");
     lines.push(`ID: \`${esc(event.escalationId)}\``);
 
+    // event.escalationId is minted by the tool call (crypto.randomUUID())
+    // and must stay reachable both from these buttons and from the separate
+    // reply-to-message mapping below, so it is used as the park's key rather
+    // than letting parked-interactions.ts allocate one.
     const buttons = [];
     if (event.context.suggestedReply) {
       buttons.push([
-        { text: "Send Suggested Reply", callback_data: `esc_suggested_${event.escalationId}` },
+        { text: "Send Suggested Reply", callback_data: encodeCallback("esc", event.escalationId, "suggested") },
       ]);
     }
     buttons.push([
-      { text: "Reply", callback_data: `esc_reply_${event.escalationId}` },
-      { text: "Override", callback_data: `esc_override_${event.escalationId}` },
-      { text: "Dismiss", callback_data: `esc_dismiss_${event.escalationId}` },
+      { text: "Reply", callback_data: encodeCallback("esc", event.escalationId, "reply") },
+      { text: "Override", callback_data: encodeCallback("esc", event.escalationId, "override") },
+      { text: "Dismiss", callback_data: encodeCallback("esc", event.escalationId, "dismiss") },
     ]);
 
     const messageId = await sendMessage(ctx, token, escalationChatId, lines.join("\n"), {
@@ -130,8 +135,6 @@ export class EscalationManager {
       ctx.logger.error("Failed to send escalation message", { escalationId: event.escalationId });
       return;
     }
-
-    const timeoutAt = new Date(Date.now() + event.timeout.durationMs).toISOString();
 
     const stored: StoredEscalation = {
       escalationId: event.escalationId,
@@ -147,18 +150,12 @@ export class EscalationManager {
       originMessageId: event.originMessageId,
       escalationChatId,
       escalationMessageId: String(messageId),
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt,
       defaultAction: event.timeout.defaultAction,
       transport: event.transport,
       sessionId: event.sessionId,
     };
 
-    await ctx.state.set(
-      { scopeKind: "instance", stateKey: `escalation_${event.escalationId}` },
-      stored,
-    );
+    await park(ctx, "esc", stored, { key: event.escalationId, ttlMs: event.timeout.durationMs });
 
     // Map the escalation message back so replies can be routed
     await ctx.state.set(
@@ -171,21 +168,10 @@ export class EscalationManager {
       },
     );
 
-    // Track pending escalation IDs for timeout checks
-    const pendingIds = (await ctx.state.get({
-      scopeKind: "instance",
-      stateKey: "escalation_pending_ids",
-    }) as string[] | null) ?? [];
-    pendingIds.push(event.escalationId);
-    await ctx.state.set(
-      { scopeKind: "instance", stateKey: "escalation_pending_ids" },
-      pendingIds,
-    );
-
     ctx.logger.info("Escalation created", {
       escalationId: event.escalationId,
       reason: event.reason,
-      timeoutAt,
+      timeoutAt: new Date(Date.now() + event.timeout.durationMs).toISOString(),
     });
   }
 
@@ -199,14 +185,11 @@ export class EscalationManager {
     chatId: string | null,
     messageId: number | undefined,
   ): Promise<void> {
-    const stored = await ctx.state.get({
-      scopeKind: "instance",
-      stateKey: `escalation_${escalationId}`,
-    }) as StoredEscalation | null;
-
-    if (!stored || stored.status !== "pending") {
+    const result = await unpark<StoredEscalation>(ctx, "esc", escalationId);
+    if (result.status !== "live") {
       return;
     }
+    const stored = result.payload;
 
     switch (action) {
       case "suggested": {
@@ -263,17 +246,13 @@ export class EscalationManager {
     escalationId: string,
     response: EscalationResponse,
   ): Promise<void> {
-    const stored = await ctx.state.get({
-      scopeKind: "instance",
-      stateKey: `escalation_${escalationId}`,
-    }) as StoredEscalation | null;
-
-    if (!stored || stored.status !== "pending") {
+    const result = await unpark<StoredEscalation>(ctx, "esc", escalationId);
+    if (result.status !== "live") {
       ctx.logger.warn("Escalation respond called for non-pending escalation", { escalationId });
       return;
     }
 
-    await this.resolve(ctx, token, stored, response);
+    await this.resolve(ctx, token, result.payload, response);
   }
 
   private async resolve(
@@ -282,13 +261,7 @@ export class EscalationManager {
     stored: StoredEscalation,
     response: EscalationResponse,
   ): Promise<void> {
-    stored.status = "resolved";
-    await ctx.state.set(
-      { scopeKind: "instance", stateKey: `escalation_${stored.escalationId}` },
-      stored,
-    );
-
-    await this.removePending(ctx, stored.escalationId);
+    await clear(ctx, "esc", stored.escalationId);
 
     const statusLabel = response.action === "dismiss" ? "Dismissed" : "Resolved";
     await editMessage(
@@ -369,37 +342,17 @@ export class EscalationManager {
    * against a controlled clock instead of real time.
    */
   async checkTimeouts(ctx: PluginContext, token: string, companyId?: string, now: number = Date.now()): Promise<void> {
-    const pendingIds = (await ctx.state.get({
-      scopeKind: "instance",
-      stateKey: "escalation_pending_ids",
-    }) as string[] | null) ?? [];
+    const expired = await listExpired<StoredEscalation>(ctx, "esc", now);
 
-    if (pendingIds.length === 0) return;
-
-    for (const escalationId of pendingIds) {
-      const stored = await ctx.state.get({
-        scopeKind: "instance",
-        stateKey: `escalation_${escalationId}`,
-      }) as StoredEscalation | null;
-
-      if (!stored || stored.status !== "pending") {
-        await this.removePending(ctx, escalationId);
-        continue;
-      }
+    for (const { key: escalationId, payload: stored } of expired) {
+      // Leave a filtered-out company's park alone — it is still expired and
+      // will be picked up by a check that isn't scoped away from it (a bare
+      // call from the job, or that company's own next tick).
       if (companyId && stored.companyId !== companyId) continue;
-
-      const timeoutAt = new Date(stored.timeoutAt).getTime();
-      if (now < timeoutAt) continue;
 
       ctx.logger.info("Escalation timed out", { escalationId, defaultAction: stored.defaultAction });
 
-      stored.status = "timed_out";
-      await ctx.state.set(
-        { scopeKind: "instance", stateKey: `escalation_${escalationId}` },
-        stored,
-      );
-
-      await this.removePending(ctx, escalationId);
+      await clear(ctx, "esc", escalationId);
 
       await editMessage(
         ctx,
@@ -435,18 +388,5 @@ export class EscalationManager {
         });
       }
     }
-  }
-
-  private async removePending(ctx: PluginContext, escalationId: string): Promise<void> {
-    const pendingIds = (await ctx.state.get({
-      scopeKind: "instance",
-      stateKey: "escalation_pending_ids",
-    }) as string[] | null) ?? [];
-
-    const updated = pendingIds.filter((id) => id !== escalationId);
-    await ctx.state.set(
-      { scopeKind: "instance", stateKey: "escalation_pending_ids" },
-      updated,
-    );
   }
 }
