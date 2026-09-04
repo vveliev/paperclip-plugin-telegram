@@ -26,6 +26,9 @@ function mockCtx(agentsListImpl?: () => Promise<unknown[]>): PluginContext {
       set: vi.fn(async (key: { stateKey: string }, value: unknown) => {
         stateStore[key.stateKey] = value;
       }),
+      delete: vi.fn(async (key: { stateKey: string }) => {
+        delete stateStore[key.stateKey];
+      }),
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     events: { emit: vi.fn(async (e: string, c: string, p: unknown) => { emittedEvents.push({ event: e, companyId: c, payload: p }); }), on: vi.fn() },
@@ -84,7 +87,7 @@ describe("handleHandoffApproval", () => {
     expect(sentMessages.some((m) => m.text.includes("Auto") && m.text.includes("spawned"))).toBe(false);
     expect(ctx.issues.create).toHaveBeenCalledWith(expect.objectContaining({ assigneeAgentId: "a2" }));
     // Pending handoff record must be cleared so a duplicate button press is a no-op
-    expect(stateStore["handoff_h1"]).toBeNull();
+    expect(stateStore).not.toHaveProperty("handoff_h1");
   });
 
   it("auto-spawns the target agent by resolved UUID (not by name) when no session exists yet", async () => {
@@ -126,6 +129,6 @@ describe("handleHandoffRejection", () => {
     await handleHandoffRejection(ctx, "token", "h1", "alice", "cb-1", "chat-1", 99);
 
     expect(sentMessages[0].text).toContain("rejected");
-    expect(stateStore["handoff_h1"]).toBeNull();
+    expect(stateStore).not.toHaveProperty("handoff_h1");
   });
 });
