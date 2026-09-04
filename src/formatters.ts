@@ -108,9 +108,13 @@ function runButton(agentId: string, runId: string | null, publicUrl?: string): {
   return null;
 }
 
-// Distinct from runButton: surfaced only when the inline error text was cut,
-// so the affordance for "see the rest of this" doesn't ride on a button
-// whose stated purpose is the run dashboard, not the raw error (BLA-362).
+// Renders only when the inline error text was cut, and takes runButton's
+// place in the keyboard row rather than sitting alongside it: the run
+// dashboard exposes no error-anchored URL (GIF-139), so both buttons would
+// point at the identical `/runs/:runId` page. Two labels for one URL reads
+// as broken, so the more accurate label ("Full error", surfaced right below
+// the truncated text it completes) wins the slot; formatAgentError falls
+// back to runButton when the message wasn't truncated (BLA-362).
 function fullErrorButton(agentId: string, runId: string | null, publicUrl?: string): { text: string; url: string } | null {
   if (publicUrl && isExternalUrl(publicUrl) && runId) {
     return { text: "Full error ↗", url: `${publicUrl}/agents/${agentId}/runs/${runId}` };
@@ -321,9 +325,12 @@ export function formatAgentError(event: PluginEvent, opts?: IssueLinksOpts): For
   const isTruncated = errorMessage.length > AGENT_ERROR_TRUNCATE_LENGTH;
   lines.push(`\n${code(truncateAtWord(errorMessage, AGENT_ERROR_TRUNCATE_LENGTH))}`);
 
+  // fullErrorButton and runButton point at the same run page, so only one
+  // occupies the slot — never both (GIF-139).
+  const fullError = isTruncated ? fullErrorButton(agentId, runId, opts?.baseUrl) : null;
   const buttons = [
-    isTruncated ? fullErrorButton(agentId, runId, opts?.baseUrl) : null,
-    runButton(agentId, runId, opts?.baseUrl),
+    fullError,
+    fullError ? null : runButton(agentId, runId, opts?.baseUrl),
     issueIdentifier ? issueButton(issueIdentifier, opts) : null,
     agentButton(agentId, "View Agent ↗", opts?.baseUrl),
   ].filter((button): button is { text: string; url: string } => Boolean(button));
