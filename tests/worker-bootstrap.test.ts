@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
 
 // Regression coverage for the deliveries-only bootstrap rearchitecture
@@ -395,6 +396,50 @@ describe("worker deliveries-only bootstrap", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     await expect(emit(registered, "plugin.stopping", undefined)).resolves.toBeUndefined();
+  });
+
+  // paperclip-plugin-telegram#151 (upstream paperclipai/paperclip#104): on a
+  // host that stamps every worker→host call with the AsyncLocalStorage-scoped
+  // invocation id active when the call is made, a loop started fire-and-forget
+  // from inside onConfigChanged's handler inherits that invocation's store for
+  // every later tick — even though the host discards the invocation the
+  // moment onConfigChanged returns. This models that host-side ALS (the real
+  // one lives inside the installed SDK and isn't reachable from here) and
+  // asserts pollUpdates' outbound calls carry no store at all, proving the
+  // loop detached from the invocation that started it instead of being
+  // permanently trapped inside it.
+  it("runs the polling loop outside the AsyncLocalStorage scope that started it", async () => {
+    const invocationScope = new AsyncLocalStorage<{ id: string }>();
+    // Import while unscoped, exactly like the real module: the host has not
+    // issued any invocation yet when the worker process first loads.
+    const { plugin } = await import("../src/worker.js");
+    const companyConfig = { telegramBotTokenRef: "ref-a", enableInbound: true };
+    const { ctx } = makeCtx({
+      companies: [{ id: "company-a" }],
+      configByCompany: { "company-a": companyConfig },
+      resolveSecret: async () => "bot-token-a",
+    });
+
+    const storeSeenByFetch: Array<{ id: string } | undefined> = [];
+    (ctx.http.fetch as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      storeSeenByFetch.push(invocationScope.getStore());
+      // Never resolve: the assertion only needs the store captured at call
+      // time, and letting getUpdates "succeed" would spin the loop into a
+      // tight, timer-less cycle fake timers can't advance past.
+      return new Promise(() => {});
+    });
+
+    await invocationScope.run({ id: "invocation-abc123" }, async () => {
+      await plugin.definition.setup(ctx);
+      await plugin.definition.onConfigChanged!(companyConfig);
+    });
+
+    // The invocation has "returned" from the host's perspective; a real host
+    // would discard it here. Let the loop take its first tick.
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(storeSeenByFetch.length).toBeGreaterThan(0);
+    expect(storeSeenByFetch.every((store) => store === undefined)).toBe(true);
   });
 
   // Telegram allows only one live getUpdates consumer per bot token; a second
