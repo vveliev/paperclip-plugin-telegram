@@ -1,35 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { readFileSync } from "node:fs";
-import path from "node:path";
-import { handleCommandsCommand, tryCustomCommand, BUILTIN_COMMANDS } from "../src/command-registry.js";
+import { handleCommandsCommand, tryCustomCommand } from "../src/command-registry.js";
 import type { PluginContext } from "@paperclipai/plugin-sdk";
-
-const SRC_DIR = path.join(path.dirname(new URL(import.meta.url).pathname), "..", "src");
-
-/**
- * GIF-149: `tryCustomCommand` runs before `handleCommand`'s dispatcher, so a
- * name that is dispatchable but missing from BUILTIN_COMMANDS both (a) passes
- * the "cannot override a built-in" check on import and (b) permanently
- * shadows the real handler. This extracts the actual `case "x":` labels of
- * `handleCommand`'s top-level switch in commands.ts — the ground truth for
- * "dispatchable" — so the two can't silently drift apart again, the same
- * structural-scan approach parse-mode-convention.test.ts uses for sendMessage
- * call sites.
- */
-function dispatchableCommandNames(): string[] {
-  const src = readFileSync(path.join(SRC_DIR, "commands.ts"), "utf8");
-  const switchStart = src.indexOf("switch (command) {");
-  if (switchStart === -1) throw new Error("Could not find handleCommand's switch (command) block");
-  const switchEnd = src.indexOf("\n  }", switchStart);
-  if (switchEnd === -1) throw new Error("Could not find the end of handleCommand's switch block");
-  const block = src.slice(switchStart, switchEnd);
-  const names = [...block.matchAll(/case "([a-z_]+)":/g)].map((m) => m[1]);
-  if (names.length === 0) throw new Error("Extracted zero case labels — the regex or markers drifted");
-  // "commands" is dispatched in worker.ts, ahead of tryCustomCommand, rather
-  // than through this switch — but it is just as dispatchable and must be
-  // just as protected.
-  return [...names, "commands"];
-}
 
 let sentMessages: Array<{ chatId: string; text: string; options?: Record<string, unknown> }> = [];
 let stateStore: Record<string, unknown> = {};
@@ -141,26 +112,11 @@ describe("handleCommandsCommand - subcommands", () => {
   });
 });
 
-describe("BUILTIN_COMMANDS drift guard", () => {
-  it("covers every name handleCommand's switch actually dispatches", () => {
-    // If this fails, a command was added to (or renamed in) handleCommand's
-    // switch without a matching addition to BUILTIN_COMMANDS. Import-time
-    // protection and the shadowing check above are only as complete as this
-    // set — see GIF-149.
-    const dispatchable = dispatchableCommandNames();
-    const missing = dispatchable.filter((name) => !BUILTIN_COMMANDS.has(name));
-    expect(missing).toEqual([]);
-  });
-
-  it("does not protect names that are no longer dispatchable", () => {
-    // The inverse drift: a name left in BUILTIN_COMMANDS after its handler
-    // was removed just blocks that name from ever being reused as a custom
-    // command for no reason.
-    const dispatchable = new Set(dispatchableCommandNames());
-    const stale = [...BUILTIN_COMMANDS].filter((name) => !dispatchable.has(name));
-    expect(stale).toEqual([]);
-  });
-});
+// GIF-149's BUILTIN_COMMANDS-vs-dispatch drift guard lived here. GIF-159
+// replaced BUILTIN_COMMANDS with BUILTIN_COMMAND_NAMES, a view derived
+// directly from commands.ts's COMMANDS table (see src/commands.ts), so the
+// drift it guarded against — a name dispatchable but unprotected — is no
+// longer representable and the guard is redundant.
 
 describe("Namespace protection - built-in commands cannot be overridden", () => {
   it("rejects import of /status as custom command", async () => {
