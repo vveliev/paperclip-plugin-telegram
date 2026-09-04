@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   definePlugin,
   runWorker,
@@ -204,6 +205,29 @@ let ownerConfigJson: string | null = null;
 const refusedCompanies = new Set<string>();
 let bootstrapQueue: Promise<void> = Promise.resolve();
 let pollingActive = false;
+
+// The installed SDK stamps every worker→host call with the host-issued
+// invocation id captured by its own (private, unreachable from here)
+// `AsyncLocalStorage`. `pollUpdates` is started fire-and-forget from inside
+// `bootstrapRuntime`, which `onConfigChanged`'s handler calls while still
+// inside that invocation's `.run()` — so without this, the loop's async
+// continuations inherit that invocation id for the rest of the worker's
+// life (Node propagates an AsyncLocalStorage store to everything scheduled
+// from within `.run()`, awaited or not). The host clears the invocation the
+// moment `onConfigChanged` returns, so every call the loop makes afterward
+// echoes an id the host no longer recognizes and is rejected: "the worker
+// referenced a missing, expired, or unknown invocation scope"
+// (paperclip-plugin-telegram#104, upstream paperclipai/paperclip#9368,
+// #11163). `AsyncLocalStorage.snapshot()` is a Node static that captures
+// the state of *every* active AsyncLocalStorage at the point it is called —
+// not just instances this module holds a reference to. Calling it here, at
+// module load, is before the SDK's invocation storage has ever run a
+// `.run()`, so the captured snapshot is blank. Restarting the loop inside
+// that snapshot detaches it from whichever invocation happened to start it:
+// its calls carry no invocation id at all, which the host treats as a
+// proactive call and grants against the plugin's configured companies
+// instead of rejecting.
+const blankInvocationSnapshot = AsyncLocalStorage.snapshot();
 
 type TelegramRuntime = {
   companyId: string;
@@ -663,9 +687,12 @@ async function bootstrapRuntime(
 
   if (!pollingActive) {
     pollingActive = true;
-    pollUpdates(ctx).catch((err) =>
-      ctx.logger.error("Polling loop crashed", { error: String(err) }),
-    );
+    // Detach from this invocation — see `blankInvocationSnapshot` above.
+    blankInvocationSnapshot(() => {
+      pollUpdates(ctx).catch((err) =>
+        ctx.logger.error("Polling loop crashed", { error: String(err) }),
+      );
+    });
   }
 
   ctx.logger.info("Telegram plugin runtime ready", { companyId });
@@ -682,6 +709,9 @@ async function bootstrapRuntime(
  * (enableCommands/enableInbound) takes effect on the next tick without
  * needing to tear down and restart the loop, which long-polling has no
  * persistent connection to tear down anyway.
+ *
+ * Callers MUST start this inside `blankInvocationSnapshot`, not directly
+ * from a host-issued handler — see that constant's comment.
  */
 async function pollUpdates(ctx: PluginContext): Promise<void> {
   ctx.logger.info("Telegram polling loop starting");
