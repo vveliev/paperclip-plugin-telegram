@@ -44,3 +44,21 @@ export async function lookupCompanyLink(ctx: PluginContext, chatId: string): Pro
   if (!companyId) return { linked: false };
   return { linked: true, companyId, companyName: mapping?.companyName };
 }
+
+/**
+ * The company for a chat, preferring one the caller already resolved.
+ *
+ * Every command and ACP entry point receives an optional companyId from the
+ * dispatcher and falls back to the chat link when it is absent. Expressing
+ * that as one call removes a mutable local and a nesting level from each of
+ * the eight call sites, while leaving the not-linked reply where it belongs —
+ * at the call site, because each one says something different.
+ */
+export async function companyForChat(
+  ctx: PluginContext,
+  chatId: string,
+  provided?: string,
+): Promise<CompanyLookupResult> {
+  if (provided) return { linked: true, companyId: provided };
+  return lookupCompanyLink(ctx, chatId);
+}

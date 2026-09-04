@@ -3,7 +3,7 @@ import { sendMessage, editMessage, escapeMarkdownV2, sendChatAction } from "./te
 import { truncateAtWord } from "./telegram-api.js";
 import { resolveMappedProjectIdForTopic } from "./topic-projects.js";
 import { str } from "./coerce.js";
-import { lookupCompanyLink, NOT_LINKED_MESSAGE } from "./company-link.js";
+import { companyForChat, lookupCompanyLink, NOT_LINKED_MESSAGE } from "./company-link.js";
 import {
   MAX_AGENTS_PER_THREAD,
   DEFAULT_CONVERSATION_TURNS,
@@ -342,15 +342,12 @@ async function handleAcpSpawn(
 
   const trimmedName = agentName.trim();
   const displayName = trimmedName.charAt(0).toUpperCase() + trimmedName.slice(1);
-  let resolvedCompanyId = companyId;
-  if (!resolvedCompanyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
-      return;
-    }
-    resolvedCompanyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, companyId);
+  if (!link.linked) {
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
+    return;
   }
+  const resolvedCompanyId = link.companyId;
 
   // Try native session first: resolve agent by name, then create session
   let transport: "native" | "acp" = "acp";
@@ -527,15 +524,12 @@ async function handleAcpCancel(
     (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime(),
   )[0];
 
-  let resolvedCompanyId = companyId;
-  if (!resolvedCompanyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
-      return;
-    }
-    resolvedCompanyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, companyId);
+  if (!link.linked) {
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
+    return;
   }
+  const resolvedCompanyId = link.companyId;
 
   if (target.transport === "native") {
     try {
@@ -631,15 +625,12 @@ async function handleAcpClose(
     )[0]!;
   }
 
-  let resolvedCompanyId = companyId;
-  if (!resolvedCompanyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
-      return;
-    }
-    resolvedCompanyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, companyId);
+  if (!link.linked) {
+    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
+    return;
   }
+  const resolvedCompanyId = link.companyId;
 
   // Close via the correct transport
   if (targetSession.transport === "native") {
@@ -1635,29 +1626,26 @@ async function checkConversationLoopContinuation(
     const nextSession = sessions.find((s) => s.sessionId === nextSessionId);
 
     if (nextSession) {
-      let resolvedCompanyId = companyId;
-      if (!resolvedCompanyId) {
-        const link = await lookupCompanyLink(ctx, chatId);
-        if (!link.linked) {
-          // Pausing beats continuing: this runs once per turn, so an unresolved
-          // company would otherwise be re-spent on every remaining turn of the
-          // discussion, each failing the same way and none of it visible.
-          loop.status = "paused";
-          await ctx.state.set(
-            { scopeKind: "instance", stateKey: `loop_${chatId}_${threadId}` },
-            loop,
-          );
-          await sendMessage(
-            ctx,
-            token,
-            chatId,
-            `${escapeMarkdownV2("⚠️")} *Discussion Paused* \\- ${escapeMarkdownV2("this chat is not linked to a Paperclip company. Use /connect, then send a message to resume.")}`,
-            { parseMode: "MarkdownV2", messageThreadId: threadId },
-          );
-          return;
-        }
-        resolvedCompanyId = link.companyId;
+      const link = await companyForChat(ctx, chatId, companyId);
+      if (!link.linked) {
+        // Pausing beats continuing: this runs once per turn, so an unresolved
+        // company would otherwise be re-spent on every remaining turn of the
+        // discussion, each failing the same way and none of it visible.
+        loop.status = "paused";
+        await ctx.state.set(
+          { scopeKind: "instance", stateKey: `loop_${chatId}_${threadId}` },
+          loop,
+        );
+        await sendMessage(
+          ctx,
+          token,
+          chatId,
+          `${escapeMarkdownV2("⚠️")} *Discussion Paused* \\- ${escapeMarkdownV2("this chat is not linked to a Paperclip company. Use /connect, then send a message to resume.")}`,
+          { parseMode: "MarkdownV2", messageThreadId: threadId },
+        );
+        return;
       }
+      const resolvedCompanyId = link.companyId;
 
       if (nextSession.transport === "native") {
         await wakeAgentWithIssue(

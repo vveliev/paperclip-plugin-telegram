@@ -7,7 +7,7 @@ import { handleAcpCommand } from "./acp-bridge.js";
 import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js";
 import { str } from "./coerce.js";
 import { isExternalUrl } from "./url-utils.js";
-import { lookupCompanyLink, NOT_LINKED_MESSAGE } from "./company-link.js";
+import { companyForChat, lookupCompanyLink, NOT_LINKED_MESSAGE } from "./company-link.js";
 
 type BotCommand = {
   command: string;
@@ -359,16 +359,13 @@ async function handleDecisions(
 ): Promise<void> {
   await sendChatAction(ctx, token, chatId);
 
-  let companyId = resolvedCompanyId;
-  if (!companyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      // plain: describeDecisionsError's text is not escaped for MarkdownV2
-      await sendMessage(ctx, token, chatId, describeDecisionsError(new Error(NOT_LINKED_MESSAGE)), { parseMode: undefined, messageThreadId });
-      return;
-    }
-    companyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, resolvedCompanyId);
+  if (!link.linked) {
+    // plain: describeDecisionsError's text is not escaped for MarkdownV2
+    await sendMessage(ctx, token, chatId, describeDecisionsError(new Error(NOT_LINKED_MESSAGE)), { parseMode: undefined, messageThreadId });
+    return;
   }
+  const companyId = link.companyId;
 
   try {
     const limit = parseDecisionsLimit(args);
@@ -400,18 +397,15 @@ async function handleStatus(
 ): Promise<void> {
   await sendChatAction(ctx, token, chatId);
 
-  let companyId = resolvedCompanyId;
-  if (!companyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      await sendMessage(ctx, token, chatId, escapeMarkdownV2("📊") + " *Paperclip Status*\n\n" + escapeMarkdownV2("Could not fetch status. Make sure this chat is linked to a company with /connect."), {
-        parseMode: "MarkdownV2",
-        messageThreadId,
-      });
-      return;
-    }
-    companyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, resolvedCompanyId);
+  if (!link.linked) {
+    await sendMessage(ctx, token, chatId, escapeMarkdownV2("📊") + " *Paperclip Status*\n\n" + escapeMarkdownV2("Could not fetch status. Make sure this chat is linked to a company with /connect."), {
+      parseMode: "MarkdownV2",
+      messageThreadId,
+    });
+    return;
   }
+  const companyId = link.companyId;
 
   try {
     const agents = await ctx.agents.list({ companyId });
@@ -462,23 +456,20 @@ async function handleIssues(
 ): Promise<void> {
   await sendChatAction(ctx, token, chatId);
 
-  let companyId = resolvedCompanyId;
-  if (!companyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      const filter = projectFilter ? ` for project "${projectFilter}"` : "";
-      // plain: interpolates the raw projectFilter argument
-      await sendMessage(
-        ctx,
-        token,
-        chatId,
-        `Could not fetch issues${filter}. Make sure this chat is linked with /connect.`,
-        { parseMode: undefined, messageThreadId },
-      );
-      return;
-    }
-    companyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, resolvedCompanyId);
+  if (!link.linked) {
+    const filter = projectFilter ? ` for project "${projectFilter}"` : "";
+    // plain: interpolates the raw projectFilter argument
+    await sendMessage(
+      ctx,
+      token,
+      chatId,
+      `Could not fetch issues${filter}. Make sure this chat is linked with /connect.`,
+      { parseMode: undefined, messageThreadId },
+    );
+    return;
   }
+  const companyId = link.companyId;
 
   try {
     const company = await ctx.companies.get(companyId);
@@ -536,22 +527,19 @@ async function handleAgents(
 ): Promise<void> {
   await sendChatAction(ctx, token, chatId);
 
-  let companyId = resolvedCompanyId;
-  if (!companyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      // plain: static status text, no formatting need
-      await sendMessage(
-        ctx,
-        token,
-        chatId,
-        "Could not fetch agents. Make sure this chat is linked with /connect.",
-        { parseMode: undefined, messageThreadId },
-      );
-      return;
-    }
-    companyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, resolvedCompanyId);
+  if (!link.linked) {
+    // plain: static status text, no formatting need
+    await sendMessage(
+      ctx,
+      token,
+      chatId,
+      "Could not fetch agents. Make sure this chat is linked with /connect.",
+      { parseMode: undefined, messageThreadId },
+    );
+    return;
   }
+  const companyId = link.companyId;
 
   try {
     const agents = await ctx.agents.list({ companyId });
@@ -903,22 +891,19 @@ async function handleCreate(
 
   await sendChatAction(ctx, token, chatId);
 
-  let companyId = resolvedCompanyId;
-  if (!companyId) {
-    const link = await lookupCompanyLink(ctx, chatId);
-    if (!link.linked) {
-      // plain: interpolates a raw upstream error message
-      await sendMessage(
-        ctx,
-        token,
-        chatId,
-        `Failed to create task: ${NOT_LINKED_MESSAGE}`,
-        { parseMode: undefined, messageThreadId },
-      );
-      return;
-    }
-    companyId = link.companyId;
+  const link = await companyForChat(ctx, chatId, resolvedCompanyId);
+  if (!link.linked) {
+    // plain: interpolates a raw upstream error message
+    await sendMessage(
+      ctx,
+      token,
+      chatId,
+      `Failed to create task: ${NOT_LINKED_MESSAGE}`,
+      { parseMode: undefined, messageThreadId },
+    );
+    return;
   }
+  const companyId = link.companyId;
 
   try {
     const company = await ctx.companies.get(companyId);
