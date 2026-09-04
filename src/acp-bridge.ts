@@ -860,10 +860,11 @@ async function handleOutputSequencing(
     );
 
     if (entry.done) {
-      await ctx.state.set(
-        { scopeKind: "instance", stateKey: speakerKey },
-        null,
-      );
+      // Writing null instead of deleting hits the platform's NOT-NULL
+      // constraint on plugin_state.value_json and throws (BLA-606), which
+      // would leave the speaker lock held forever and wedge every other
+      // agent's output behind it.
+      await ctx.state.delete({ scopeKind: "instance", stateKey: speakerKey });
       await flushOutputQueue(ctx, token, chatId, threadId);
     }
 
@@ -932,10 +933,7 @@ async function flushOutputQueue(
     );
 
     if (entry.done) {
-      await ctx.state.set(
-        { scopeKind: "instance", stateKey: speakerKey },
-        null,
-      );
+      await ctx.state.delete({ scopeKind: "instance", stateKey: speakerKey });
       await flushOutputQueue(ctx, token, chatId, threadId);
       return;
     }
@@ -1097,7 +1095,11 @@ async function sendLabeledOutput(
   }
 
   if (done) {
-    await ctx.state.set({ scopeKind: "instance", stateKey: turnKey }, null);
+    // Fifth BLA-606 site found during the GIF-150 review: not in the
+    // issue's original count, but the same null-write-throws pattern, and
+    // it fires on every completed turn, ahead of the speaker-lock releases
+    // above in the call chain.
+    await ctx.state.delete({ scopeKind: "instance", stateKey: turnKey });
   } else {
     await ctx.state.set(
       { scopeKind: "instance", stateKey: turnKey },
@@ -1199,10 +1201,11 @@ export async function handleHandoffApproval(
   const sessions = await getSessions(ctx, pending.chatId, pending.threadId);
   await executeHandoff(ctx, token, pending.chatId, pending.threadId, pending.targetAgent, pending.contextSummary, sessions, pending.companyId);
 
-  await ctx.state.set(
-    { scopeKind: "instance", stateKey: `handoff_${handoffId}` },
-    null,
-  );
+  // This runs outside handleCallbackQuery's try/catch, so a throw here
+  // (BLA-606: a null write hits the NOT-NULL constraint on
+  // plugin_state.value_json) escapes to handleUpdate and freezes the
+  // polling offset for every chat.
+  await ctx.state.delete({ scopeKind: "instance", stateKey: `handoff_${handoffId}` });
 
   ctx.logger.info("Handoff approved", { handoffId, actor, targetAgent: pending.targetAgent });
 }
@@ -1231,10 +1234,7 @@ export async function handleHandoffRejection(
     { parseMode: "MarkdownV2", messageThreadId: pending.threadId },
   );
 
-  await ctx.state.set(
-    { scopeKind: "instance", stateKey: `handoff_${handoffId}` },
-    null,
-  );
+  await ctx.state.delete({ scopeKind: "instance", stateKey: `handoff_${handoffId}` });
 
   ctx.logger.info("Handoff rejected", { handoffId, actor, targetAgent: pending.targetAgent });
 }

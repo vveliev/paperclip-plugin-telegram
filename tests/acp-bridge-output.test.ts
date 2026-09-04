@@ -30,6 +30,9 @@ function mockCtx(): PluginContext {
       set: vi.fn(async (key: { stateKey: string }, value: unknown) => {
         stateStore[key.stateKey] = value;
       }),
+      delete: vi.fn(async (key: { stateKey: string }) => {
+        delete stateStore[key.stateKey];
+      }),
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     events: { emit: vi.fn().mockResolvedValue(undefined), on: vi.fn() },
@@ -174,7 +177,7 @@ describe("handleAcpOutput - accumulate/chunk/edit turn state", () => {
     expect(editedMessages[0].messageId).toBe(100);
     expect(editedMessages[0].text).toContain("finished");
     expect(editedMessages[0].text).toContain("✅");
-    expect(stateStore["output_turn_chat-1_42_s1"]).toBeNull();
+    expect(stateStore).not.toHaveProperty("output_turn_chat-1_42_s1");
 
     // A later event for the same session starts a fresh message chain.
     await handleAcpOutput(ctx, "token", { sessionId: "s1", type: "text", chatId: "chat-1", threadId: 42, text: "new turn" });
