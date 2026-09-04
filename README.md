@@ -292,6 +292,10 @@ pnpm build
 
 ~80 tests covering notifications, approvals, escalation, session registry, media pipeline, custom commands, proactive suggestions, MarkdownV2 formatting, and bot commands.
 
+See [`docs/architecture-migration.md`](docs/architecture-migration.md) for
+why this fork's Telegram runtime is single-owner (not multi-company
+polling) as of the `prerelease` rebase onto `upstream/main`.
+
 ## Contributing
 
 Issues and PRs welcome at [github.com/mvanhorn/paperclip-plugin-telegram](https://github.com/mvanhorn/paperclip-plugin-telegram).
