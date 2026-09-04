@@ -3,6 +3,7 @@ import { sendMessage, editMessage, escapeMarkdownV2, sendChatAction } from "./te
 import { truncateAtWord } from "./telegram-api.js";
 import { resolveMappedProjectIdForTopic } from "./topic-projects.js";
 import { str } from "./coerce.js";
+import { companyForChat, lookupCompanyLink, NOT_LINKED_MESSAGE } from "./company-link.js";
 import {
   MAX_AGENTS_PER_THREAD,
   DEFAULT_CONVERSATION_TURNS,
@@ -341,11 +342,12 @@ async function handleAcpSpawn(
 
   const trimmedName = agentName.trim();
   const displayName = trimmedName.charAt(0).toUpperCase() + trimmedName.slice(1);
-  const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
-  if (!resolvedCompanyId) {
+  const link = await companyForChat(ctx, chatId, companyId);
+  if (!link.linked) {
     await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
+  const resolvedCompanyId = link.companyId;
 
   // Try native session first: resolve agent by name, then create session
   let transport: "native" | "acp" = "acp";
@@ -522,11 +524,12 @@ async function handleAcpCancel(
     (a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime(),
   )[0];
 
-  const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
-  if (!resolvedCompanyId) {
+  const link = await companyForChat(ctx, chatId, companyId);
+  if (!link.linked) {
     await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
+  const resolvedCompanyId = link.companyId;
 
   if (target.transport === "native") {
     try {
@@ -622,11 +625,12 @@ async function handleAcpClose(
     )[0]!;
   }
 
-  const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
-  if (!resolvedCompanyId) {
+  const link = await companyForChat(ctx, chatId, companyId);
+  if (!link.linked) {
     await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId });
     return;
   }
+  const resolvedCompanyId = link.companyId;
 
   // Close via the correct transport
   if (targetSession.transport === "native") {
@@ -737,12 +741,16 @@ export async function routeMessageToAgent(
   }
   await saveSessions(ctx, chatId, threadId, sessions);
 
-  const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
+  let resolvedCompanyId = companyId;
   if (!resolvedCompanyId) {
-    // Handled: the message was addressed to a live session, so staying silent
-    // here would look like the agent simply ignored it.
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId: threadId });
-    return true;
+    const link = await lookupCompanyLink(ctx, chatId);
+    if (!link.linked) {
+      // Handled: the message was addressed to a live session, so staying silent
+      // here would look like the agent simply ignored it.
+      await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId: threadId });
+      return true;
+    }
+    resolvedCompanyId = link.companyId;
   }
   const projectId = await resolveMappedProjectIdForTopic(ctx, chatId, resolvedCompanyId, threadId);
 
@@ -1618,8 +1626,8 @@ async function checkConversationLoopContinuation(
     const nextSession = sessions.find((s) => s.sessionId === nextSessionId);
 
     if (nextSession) {
-      const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
-      if (!resolvedCompanyId) {
+      const link = await companyForChat(ctx, chatId, companyId);
+      if (!link.linked) {
         // Pausing beats continuing: this runs once per turn, so an unresolved
         // company would otherwise be re-spent on every remaining turn of the
         // discussion, each failing the same way and none of it visible.
@@ -1637,6 +1645,7 @@ async function checkConversationLoopContinuation(
         );
         return;
       }
+      const resolvedCompanyId = link.companyId;
 
       if (nextSession.transport === "native") {
         await wakeAgentWithIssue(
@@ -1695,35 +1704,6 @@ async function saveSessions(
     sessions,
   );
 }
-
-/**
- * The company this chat is linked to, or null when it is linked to nothing.
- *
- * This used to fall back to the raw `chatId`, which is a Telegram identifier
- * and never a Paperclip company id. Every caller then spent that fake id on a
- * host call that could only fail, and because nothing here throws or logs, an
- * unlinked chat looked exactly like a working one. The discussion loop made it
- * worse: it re-resolved per turn, so one unlinked chat produced a fake id on
- * every turn of an agent-to-agent conversation.
- *
- * Returning null forces each caller to say why it stopped. `companyName` stays
- * as a fallback because worker.ts and commands.ts both accept it for chats
- * linked by older versions; unlike chatId it is at least a company reference.
- */
-async function resolveCompanyIdFromChat(ctx: PluginContext, chatId: string): Promise<string | null> {
-  const mapping = await ctx.state.get({
-    scopeKind: "instance",
-    stateKey: `chat_${chatId}`,
-  }) as { companyId?: string; companyName?: string } | null;
-  return mapping?.companyId ?? mapping?.companyName ?? null;
-}
-
-/**
- * What every call site says when the chat turns out not to be linked.
- * Sent plain (see the parse-mode convention in formatters.ts): it's static
- * copy with no formatting need, and plain text can't fail to parse.
- */
-const NOT_LINKED_MESSAGE = "This chat is not linked to a Paperclip company. Use /connect first.";
 
 function simpleHash(text: string): string {
   let hash = 0;

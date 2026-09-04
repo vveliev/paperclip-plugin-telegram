@@ -157,6 +157,43 @@ afterEach(() => {
   global.fetch = originalFetch;
 });
 
+describe("handleUpdate - an unlinked chat never throws out of handleUpdate", () => {
+  // A throw escaping handleUpdate stops the polling offset advancing, so
+  // Telegram redelivers the same update forever and the poller wedges for
+  // EVERY chat. The company lookup used to throw on an unlinked chat and
+  // worker.ts carried a second function purely to catch it. These assert the
+  // property at the dispatch level, not just on the lookup in isolation.
+  const UNLINKED_CHAT_ID = 909;
+
+  function commandFromUnlinkedChat(updateId: number) {
+    return {
+      update_id: updateId,
+      message: {
+        message_id: updateId,
+        chat: { id: UNLINKED_CHAT_ID },
+        from: { id: 42 },
+        text: "/status",
+        entities: [{ type: "bot_command", offset: 0, length: 7 }],
+      },
+    } as Parameters<typeof handleUpdate>[3];
+  }
+
+  it("resolves rather than rejecting when the chat is not linked to a company", async () => {
+    const ctx = mockCtx();
+    await expect(handleUpdate(ctx, "token", config, commandFromUnlinkedChat(900), baseUrl)).resolves.toBeUndefined();
+  });
+
+  it("resolves rather than rejecting when the state store itself fails", async () => {
+    // The worse case: not "no mapping" but "cannot read the mapping". This is
+    // the path that reaches lookupCompanyLink's catch, and the one that would
+    // otherwise take the poller down for every chat rather than just this one.
+    const ctx = mockCtx();
+    (ctx.state.get as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("state store unavailable"));
+
+    await expect(handleUpdate(ctx, "token", config, commandFromUnlinkedChat(901), baseUrl)).resolves.toBeUndefined();
+  });
+});
+
 describe("handleUpdate - command dispatch", () => {
   it("routes a bot command to handleCommand with the resolved companyId", async () => {
     const ctx = mockCtx();

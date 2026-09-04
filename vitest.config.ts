@@ -40,6 +40,10 @@ export default defineConfig({
         "src/telegram-api.ts": { statements: 88, functions: 88 },
         "src/secret-ref-validation.ts": { statements: 100, functions: 100 },
         "src/allowlist.ts": { statements: 100, functions: 100 },
+        // The single non-throwing chat->company lookup. Every command and
+        // ACP path resolves through it, and a regression here is what used to
+        // wedge the poller, so it is pinned rather than left to the global floor.
+        "src/company-link.ts": { statements: 100, functions: 100 },
         "src/acp-bridge.ts": { statements: 75, functions: 90 },
         "src/adapter.ts": { statements: 100, functions: 100 },
         // setup() is only reachable through the two-step boot in

@@ -156,11 +156,13 @@ const MUTATIONS = [
   },
   {
     id: "chat-id-as-company-id",
-    file: "src/acp-bridge.ts",
+    file: "src/company-link.ts",
     breaks:
       "An unlinked chat resolves to its Telegram chat id used as a Paperclip company id — an address that cannot work, spent silently on every host call.",
-    find: "  return mapping?.companyId ?? mapping?.companyName ?? null;",
-    replace: "  return mapping?.companyId ?? mapping?.companyName ?? chatId;",
+    find: `  const companyId = mapping?.companyId ?? mapping?.companyName;
+  if (!companyId) return { linked: false };`,
+    replace: `  const companyId = mapping?.companyId ?? mapping?.companyName ?? chatId;
+  if (!companyId) return { linked: false };`,
   },
   {
     id: "loop-company-not-threaded",
@@ -177,23 +179,28 @@ const MUTATIONS = [
     file: "src/acp-bridge.ts",
     breaks:
       "An agent-to-agent discussion continues with an unresolved company, re-spending the failure on every remaining turn instead of pausing once.",
-    find: `      const resolvedCompanyId = companyId ?? await resolveCompanyIdFromChat(ctx, chatId);
-      if (!resolvedCompanyId) {`,
-    replace: `      const resolvedCompanyId = (companyId ?? await resolveCompanyIdFromChat(ctx, chatId)) as string;
-      if (false) {`,
+    find: `      const link = await companyForChat(ctx, chatId, companyId);
+      if (!link.linked) {
+        // Pausing beats continuing: this runs once per turn, so an unresolved`,
+    replace: `      const link = await companyForChat(ctx, chatId, companyId);
+      if (false) {
+        // Pausing beats continuing: this runs once per turn, so an unresolved`,
   },
   {
     id: "route-message-unlinked",
     file: "src/acp-bridge.ts",
     breaks:
       "A message addressed to a live agent session in an unlinked chat is routed to a fake company instead of telling the user to /connect.",
-    find: `  if (!resolvedCompanyId) {
-    // Handled: the message was addressed to a live session, so staying silent
-    // here would look like the agent simply ignored it.
-    await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId: threadId });
-    return true;
-  }`,
-    replace: "",
+    find: `    const link = await lookupCompanyLink(ctx, chatId);
+    if (!link.linked) {
+      // Handled: the message was addressed to a live session, so staying silent
+      // here would look like the agent simply ignored it.
+      await sendMessage(ctx, token, chatId, NOT_LINKED_MESSAGE, { parseMode: undefined, messageThreadId: threadId });
+      return true;
+    }
+    resolvedCompanyId = link.companyId;`,
+    replace: `    const link = await lookupCompanyLink(ctx, chatId);
+    resolvedCompanyId = link.linked ? link.companyId : undefined;`,
   },
   {
     id: "escalation-resolved-emit-dropped",
