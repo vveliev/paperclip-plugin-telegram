@@ -363,15 +363,18 @@ export class EscalationManager {
     });
   }
 
-  async checkTimeouts(ctx: PluginContext, token: string, companyId?: string): Promise<void> {
+  /**
+   * `now` defaults to the wall clock but should be the job's `scheduledAt`
+   * (see `check-escalation-timeouts` in worker.ts) so timeout decisions run
+   * against a controlled clock instead of real time.
+   */
+  async checkTimeouts(ctx: PluginContext, token: string, companyId?: string, now: number = Date.now()): Promise<void> {
     const pendingIds = (await ctx.state.get({
       scopeKind: "instance",
       stateKey: "escalation_pending_ids",
     }) as string[] | null) ?? [];
 
     if (pendingIds.length === 0) return;
-
-    const now = Date.now();
 
     for (const escalationId of pendingIds) {
       const stored = await ctx.state.get({

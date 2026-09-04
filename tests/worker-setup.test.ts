@@ -705,21 +705,11 @@ describe("setup() Activity topic routing (BLA-618)", () => {
   });
 });
 
-// QUARANTINED — see the digest note in docs/ / the branch summary.
-//
-// These cover guarantees the delivered digest job no longer has. Upstream's
-// rewrite replaced the extracted slot helpers (resolveDigestMode,
-// parseDigestTime, digestTimesForConfig, resolveDigestSlot) with logic
-// inlined in the job that reads the wall clock instead of the job's
-// scheduledAt, so it:
-//   - ignores trigger:"manual" (no way to send a digest on demand),
-//   - fires anywhere in the first 5 minutes of the hour rather than at the
-//     configured slot,
-//   - keeps no digest_sent_<date>_<slot> marker, so two runs inside that
-//     5-minute window both send.
-// Left skipped rather than deleted: the requirements are real and the fix is
-// a worker.ts change, not a test change.
-describe.skip("setup() daily digest job", () => {
+// Un-quarantined (step 03 of docs/architecture-migration.md): the digest job
+// now keys off the job's own scheduledAt/trigger via resolveDigestMode /
+// resolveDigestSlot in worker.ts, with a digest_sent_<date>_<slot> marker and
+// a working manual trigger, instead of reading the wall clock.
+describe("setup() daily digest job", () => {
   const DIGEST_CONFIG = { ...BASE_CONFIG, digestMode: "daily", dailyDigestTime: "09:00" };
 
   it("a manual run sends the digest regardless of the current time", async () => {
@@ -796,25 +786,14 @@ describe.skip("setup() daily digest job", () => {
     expect(sendMessageCalls(harness.calls)).toHaveLength(0);
   });
 
-  it("skips a company with digest mode off without affecting a sibling company", async () => {
-    const harness = makeHarness({
-      companies: [{ id: "co-1" }, { id: "co-2" }],
-      perCompanyConfig: {
-        "co-1": { ...BASE_CONFIG, digestMode: "off" },
-        "co-2": DIGEST_CONFIG,
-      },
-    });
-    await boot(harness);
-
-    await harness.jobs["telegram-daily-digest"]({
-      jobKey: "telegram-daily-digest",
-      runId: "run-1",
-      trigger: "schedule",
-      scheduledAt: "2026-08-17T09:00:00.000Z",
-    });
-
-    expect(sendMessageCalls(harness.calls)).toHaveLength(1);
-  });
+  // Deliberately not ported: "skips a company with digest mode off without
+  // affecting a sibling company" asserted per-company digestMode, which the
+  // single-owner runtime (one delivered config for the whole plugin) cannot
+  // express — there is no second company config to differ from the first.
+  // Restoring it would silently re-litigate that architecture decision.
+  // Step 04 makes per-company runtimes expressible again; let it reintroduce
+  // per-company digest mode deliberately, if wanted, rather than pre-building
+  // for it here.
 
   it("sends an error digest instead of silently doing nothing when building it fails", async () => {
     const harness = makeHarness({
@@ -866,7 +845,14 @@ describe("setup() escalation timeout and watch jobs", () => {
       scheduledAt: "2026-08-17T00:00:00.000Z",
     });
 
-    expect(checkTimeouts).toHaveBeenCalledWith(expect.anything(), expect.any(String));
+    // The job's own scheduledAt, not the wall clock, is threaded through as
+    // "now" — this is the point of the whole change (see the digest note).
+    expect(checkTimeouts).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      undefined,
+      Date.parse("2026-08-17T00:00:00.000Z"),
+    );
     checkTimeouts.mockRestore();
   });
 
@@ -906,6 +892,8 @@ describe("setup() escalation timeout and watch jobs", () => {
       expect.anything(),
       expect.any(String),
       expect.objectContaining({ maxSuggestionsPerHourPerCompany: 10 }),
+      undefined,
+      Date.parse("2026-08-17T00:00:00.000Z"),
     );
   });
 
@@ -932,6 +920,8 @@ describe("setup() escalation timeout and watch jobs", () => {
       expect.anything(),
       expect.any(String),
       expect.objectContaining({ maxSuggestionsPerHourPerCompany: 0 }),
+      undefined,
+      Date.parse("2026-08-17T00:00:00.000Z"),
     );
   });
 
