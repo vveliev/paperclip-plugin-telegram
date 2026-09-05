@@ -44,17 +44,15 @@ import {
 import {
   handleCommandsCommand,
   tryCustomCommand,
-  isWorkflowApprovalCallback,
   resolveWorkflowApprovalCallback,
 } from "./command-registry.js";
 import { handleRegisterWatch, checkWatches } from "./watch-registry.js";
 import {
-  isInteractionAnswerCallback,
   resolveInteractionAnswerCallback,
   finalizeReplyRejection,
   isInteractionReplyMapping,
 } from "./interaction-answers.js";
-import { isDecisionsMoreCallback, resolveDecisionsMoreCallback } from "./decisions.js";
+import { resolveDecisionsMoreCallback } from "./decisions.js";
 import { AGENT_ERROR_DEDUPLICATION_WINDOW_MS, METRIC_NAMES } from "./constants.js";
 import { decode as decodeTelegramConfig, type TelegramConfig } from "./config.js";
 import { EscalationManager } from "./escalation.js";
@@ -67,6 +65,7 @@ import { buildPaperclipAuthHeaders, fetchPaperclipApi } from "./paperclip-api.js
 import { resolveTelegramBotToken, type TelegramRuntimeHealth } from "./runtime-token.js";
 import { lookupCompanyLink } from "./company-link.js";
 import { str } from "./coerce.js";
+import { decodeCallback, sweepAllExpired } from "./parked-interactions.js";
 
 type TelegramUpdate = {
   update_id: number;
@@ -1431,6 +1430,23 @@ export const plugin = definePlugin({
       }
     });
 
+    // sweep every parked flow's expired rows. No Telegram call is
+    // needed here (unlike checkTimeouts, an expired wait_approval/handoff/
+    // ask_user_questions/request_confirmation has no default action to take
+    // — the flow is simply dead), so this doesn't wait on ensureRuntime().
+    ctx.jobs.register("sweep-parked-interactions", async (job) => {
+      try {
+        const now = job.scheduledAt ? new Date(job.scheduledAt).getTime() : Date.now();
+        const swept = await sweepAllExpired(ctx, now);
+        const total = Object.values(swept).reduce((sum, n) => sum + n, 0);
+        if (total > 0) {
+          ctx.logger.info("Swept expired parked interactions", swept);
+        }
+      } catch (err) {
+        ctx.logger.error("Parked interaction sweep failed", { error: String(err) });
+      }
+    });
+
     ctx.logger.info("Telegram bot plugin handlers registered; waiting for delivered configuration");
   },
 
@@ -1676,148 +1692,118 @@ async function handleCallbackQuery(
   const chatId = query.message?.chat.id ? String(query.message.chat.id) : null;
   const messageId = query.message?.message_id;
 
-  // Must precede the "approve_" branch below only by intent, not by necessity:
-  // these are "cmd_approve_"/"cmd_reject_" and cannot collide with it. Kept
-  // adjacent so the two approval flows are read together.
-  if (isWorkflowApprovalCallback(data)) {
-    await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
+  // Every button this plugin sends decodes with the one codec in
+  // parked-interactions.ts — one dispatch on `flow` replaces what
+  // used to be six independent `data.startsWith(...)` checks.
+  const decoded = decodeCallback(data);
+  if (!decoded) {
+    await answerCallbackQuery(ctx, token, query.id, "Unknown action");
     return;
   }
 
-  if (isInteractionAnswerCallback(data)) {
-    await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
-    return;
-  }
+  switch (decoded.flow) {
+    case "wapp":
+      await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
+      return;
 
-  if (isDecisionsMoreCallback(data)) {
-    if (!chatId || !companyId) {
-      await answerCallbackQuery(ctx, token, query.id, "Could not load more.");
+    case "ask":
+    case "conf":
+      await resolveInteractionAnswerCallback(ctx, token, data, query.id, baseUrl, boardApiToken, messageId);
+      return;
+
+    case "dm": {
+      if (!chatId || !companyId) {
+        await answerCallbackQuery(ctx, token, query.id, "Could not load more.");
+        return;
+      }
+      await resolveDecisionsMoreCallback(ctx, token, data, query.id, chatId, {
+        messageThreadId: query.message?.message_thread_id,
+        baseUrl,
+        publicUrl,
+        companyId,
+        boardApiToken,
+      });
       return;
     }
-    await resolveDecisionsMoreCallback(ctx, token, data, query.id, chatId, {
-      messageThreadId: query.message?.message_thread_id,
-      baseUrl,
-      publicUrl,
-      companyId,
-      boardApiToken,
-    });
-    return;
-  }
 
-  // Must precede the "approve_" branch below only by intent, not by necessity:
-  // these are "cmd_approve_"/"cmd_reject_" and cannot collide with it. Kept
-  // adjacent so the two approval flows are read together.
-  if (isWorkflowApprovalCallback(data)) {
-    await resolveWorkflowApprovalCallback(ctx, token, data, query.id, actor, messageId);
-    return;
-  }
-
-  if (data.startsWith("approve_")) {
-    const approvalId = data.replace("approve_", "");
-    ctx.logger.info("Approval button clicked", { approvalId, actor });
-
-    try {
-      await fetchPaperclipApi(
-        ctx,
-        `${baseUrl}/api/approvals/${approvalId}/approve`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...buildPaperclipAuthHeaders(boardApiToken),
-          },
-          body: JSON.stringify({ decidedByUserId: `telegram:${actor}` }),
-        },
-      );
-
-      await answerCallbackQuery(ctx, token, query.id, "Approved");
-
-      if (chatId && messageId) {
-        await editMessage(
-          ctx,
-          token,
-          chatId,
-          messageId,
-          `${escapeMarkdownV2("✅")} *Approved* by ${escapeMarkdownV2(actor)}`,
-          { parseMode: "MarkdownV2" },
-        );
-      }
-    } catch (err) {
-      await answerCallbackQuery(ctx, token, query.id, `Failed: ${String(err)}`);
+    case "esc": {
+      const escalationManager = new EscalationManager();
+      await escalationManager.handleCallback(ctx, token, decoded.action, decoded.key, actor, query.id, chatId, messageId);
+      await answerCallbackQuery(ctx, token, query.id, `Escalation: ${decoded.action}`);
+      return;
     }
-    return;
-  }
 
-  if (data.startsWith("esc_")) {
-    const parts = data.split("_");
-    const action = parts[1] ?? "";
-    const escalationId = parts.slice(2).join("_");
-    const escalationManager = new EscalationManager();
-    await escalationManager.handleCallback(
-      ctx,
-      token,
-      action,
-      escalationId,
-      actor,
-      query.id,
-      chatId,
-      messageId,
-    );
-    await answerCallbackQuery(ctx, token, query.id, `Escalation: ${action}`);
-    return;
-  }
-
-  if (data.startsWith("reject_")) {
-    const approvalId = data.replace("reject_", "");
-    ctx.logger.info("Rejection button clicked", { approvalId, actor });
-
-    try {
-      await fetchPaperclipApi(
-        ctx,
-        `${baseUrl}/api/approvals/${approvalId}/reject`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            ...buildPaperclipAuthHeaders(boardApiToken),
-          },
-          body: JSON.stringify({ decidedByUserId: `telegram:${actor}` }),
-        },
-      );
-
-      await answerCallbackQuery(ctx, token, query.id, "Rejected");
-
-      if (chatId && messageId) {
-        await editMessage(
-          ctx,
-          token,
-          chatId,
-          messageId,
-          `${escapeMarkdownV2("❌")} *Rejected* by ${escapeMarkdownV2(actor)}`,
-          { parseMode: "MarkdownV2" },
-        );
+    case "ho": {
+      // executeHandoff awaits the agent APIs and Telegram. A throw here would
+      // escape handleCallbackQuery and handleUpdate, and a throw escaping
+      // handleUpdate stops the polling offset advancing -- Telegram redelivers
+      // the same update forever and the poller wedges for every chat, not just
+      // this one. Answer the press and log instead.
+      if (decoded.action === "approve" || decoded.action === "reject") {
+        const approve = decoded.action === "approve";
+        try {
+          if (approve) {
+            await handleHandoffApproval(ctx, token, decoded.key, actor, query.id, chatId, messageId);
+          } else {
+            await handleHandoffRejection(ctx, token, decoded.key, actor, query.id, chatId, messageId);
+          }
+          await answerCallbackQuery(ctx, token, query.id, approve ? "Handoff approved" : "Handoff rejected");
+        } catch (err) {
+          ctx.logger.error("Handoff callback failed", { handoffId: decoded.key, action: decoded.action, error: String(err) });
+          await answerCallbackQuery(ctx, token, query.id, "Could not complete the handoff. Try again.");
+        }
+        return;
       }
-    } catch (err) {
-      await answerCallbackQuery(ctx, token, query.id, `Failed: ${String(err)}`);
+      await answerCallbackQuery(ctx, token, query.id, "Unknown action");
+      return;
     }
-    return;
-  }
 
-  if (data.startsWith("handoff_approve_")) {
-    const handoffId = data.replace("handoff_approve_", "");
-    await handleHandoffApproval(ctx, token, handoffId, actor, query.id, chatId, messageId);
-    await answerCallbackQuery(ctx, token, query.id, "Handoff approved");
-    return;
-  }
+    case "apr": {
+      const approvalId = decoded.key;
+      const isApprove = decoded.action === "approve";
+      if (!isApprove && decoded.action !== "reject") {
+        await answerCallbackQuery(ctx, token, query.id, "Unknown action");
+        return;
+      }
+      ctx.logger.info(isApprove ? "Approval button clicked" : "Rejection button clicked", { approvalId, actor });
 
-  if (data.startsWith("handoff_reject_")) {
-    const handoffId = data.replace("handoff_reject_", "");
-    await handleHandoffRejection(ctx, token, handoffId, actor, query.id, chatId, messageId);
-    await answerCallbackQuery(ctx, token, query.id, "Handoff rejected");
-    return;
-  }
+      try {
+        await fetchPaperclipApi(
+          ctx,
+          `${baseUrl}/api/approvals/${approvalId}/${isApprove ? "approve" : "reject"}`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...buildPaperclipAuthHeaders(boardApiToken),
+            },
+            body: JSON.stringify({ decidedByUserId: `telegram:${actor}` }),
+          },
+        );
 
-  await answerCallbackQuery(ctx, token, query.id, "Unknown action");
+        await answerCallbackQuery(ctx, token, query.id, isApprove ? "Approved" : "Rejected");
+
+        if (chatId && messageId) {
+          await editMessage(
+            ctx,
+            token,
+            chatId,
+            messageId,
+            isApprove
+              ? `${escapeMarkdownV2("✅")} *Approved* by ${escapeMarkdownV2(actor)}`
+              : `${escapeMarkdownV2("❌")} *Rejected* by ${escapeMarkdownV2(actor)}`,
+            { parseMode: "MarkdownV2" },
+          );
+        }
+      } catch (err) {
+        await answerCallbackQuery(ctx, token, query.id, `Failed: ${String(err)}`);
+      }
+      return;
+    }
+
+    default:
+      await answerCallbackQuery(ctx, token, query.id, "Unknown action");
+  }
 }
 
 runWorker(plugin, import.meta.url);

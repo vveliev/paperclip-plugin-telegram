@@ -94,6 +94,12 @@ const manifest: PaperclipPluginManifestV1 = {
       description: "Evaluate registered watches and send suggestions when conditions are met.",
       schedule: "*/15 * * * *",
     },
+    {
+      jobKey: "sweep-parked-interactions",
+      displayName: "Sweep Parked Interactions",
+      description: "Delete expired parked callback state (wait_approval, handoff, ask_user_questions, request_confirmation) so plugin_state does not grow monotonically.",
+      schedule: "*/15 * * * *",
+    },
   ],
   tools: [
     {

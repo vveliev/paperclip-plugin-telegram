@@ -32,6 +32,9 @@ function mockCtx(): PluginContext {
       set: vi.fn(async (key: { stateKey: string }, value: unknown) => {
         stateStore[key.stateKey] = value;
       }),
+      delete: vi.fn(async (key: { stateKey: string }) => {
+        delete stateStore[key.stateKey];
+      }),
     },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     events: {
@@ -72,6 +75,20 @@ function makeEvent(overrides: Partial<EscalationEvent> = {}): EscalationEvent {
     sessionId: "session-1",
     ...overrides,
   };
+}
+
+/**
+ * Parks an escalation through the real `create()` path (not raw state
+ * seeding) so these tests exercise the same park/liveness/expiry machinery
+ * production code goes through — see parked-interactions.ts. Passing a
+ * negative `durationMs` is how a test manufactures an already-expired park:
+ * `expiresAt = Date.now() + durationMs` lands in the past immediately.
+ */
+async function createEscalation(ctx: PluginContext, overrides: Partial<EscalationEvent> = {}, chatId = "esc-chat-1") {
+  const manager = new EscalationManager();
+  const event = makeEvent(overrides);
+  await manager.create(ctx, "token", event, chatId);
+  return { manager, event };
 }
 
 beforeEach(() => {
@@ -130,7 +147,7 @@ describe("EscalationManager.create", () => {
     // First row should be the suggested reply button
     const suggestedBtn = keyboard[0].find((b: { text: string }) => b.text === "Send Suggested Reply");
     expect(suggestedBtn).toBeDefined();
-    expect(suggestedBtn!.callback_data).toBe("esc_suggested_esc-001");
+    expect(suggestedBtn!.callback_data).toBe("pk:esc:esc-001:suggested");
   });
 
   it("omits suggested reply button when no suggestedReply", async () => {
@@ -160,36 +177,35 @@ describe("EscalationManager.create", () => {
     expect(allButtons.find((b: { text: string }) => b.text === "Dismiss")).toBeDefined();
   });
 
-  it("stores escalation state in ctx.state", async () => {
+  it("parks the escalation under the shared codec's row key, keyed by escalationId", async () => {
     const manager = new EscalationManager();
     const ctx = mockCtx();
     await manager.create(ctx, "token", makeEvent(), "esc-chat-1");
 
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored).toBeDefined();
-    expect(stored.escalationId).toBe("esc-001");
-    expect(stored.status).toBe("pending");
-    expect(stored.agentId).toBe("agent-1");
-    expect(stored.reason).toBe("low_confidence");
+    const row = stateStore["esc_esc-001"] as { payload: Record<string, unknown> } | undefined;
+    expect(row).toBeDefined();
+    expect(row!.payload.escalationId).toBe("esc-001");
+    expect(row!.payload.agentId).toBe("agent-1");
+    expect(row!.payload.reason).toBe("low_confidence");
   });
 
-  it("adds escalation id to pending list", async () => {
+  it("adds escalation id to the flow's live-key index (parked-interactions.ts), so the sweeper can find it", async () => {
     const manager = new EscalationManager();
     const ctx = mockCtx();
     await manager.create(ctx, "token", makeEvent(), "esc-chat-1");
 
-    const pendingIds = stateStore["escalation_pending_ids"] as string[];
-    expect(pendingIds).toContain("esc-001");
+    const index = stateStore["index_esc"] as string[];
+    expect(index).toContain("esc-001");
   });
 
-  it("appends to existing pending list", async () => {
-    stateStore["escalation_pending_ids"] = ["esc-000"];
+  it("appends to an existing index instead of clobbering it", async () => {
     const manager = new EscalationManager();
     const ctx = mockCtx();
-    await manager.create(ctx, "token", makeEvent(), "esc-chat-1");
+    await manager.create(ctx, "token", makeEvent({ escalationId: "esc-000" }), "esc-chat-1");
+    await manager.create(ctx, "token", makeEvent({ escalationId: "esc-001" }), "esc-chat-1");
 
-    const pendingIds = stateStore["escalation_pending_ids"] as string[];
-    expect(pendingIds).toEqual(["esc-000", "esc-001"]);
+    const index = stateStore["index_esc"] as string[];
+    expect(index).toEqual(["esc-000", "esc-001"]);
   });
 
   it("includes suggested actions in message", async () => {
@@ -226,102 +242,56 @@ describe("EscalationManager.create", () => {
     const ctx = mockCtx();
     await manager.create(ctx, "token", makeEvent({ transport: "acp", sessionId: "sess-acp" }), "esc-chat-1");
 
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.transport).toBe("acp");
-    expect(stored.sessionId).toBe("sess-acp");
+    const row = stateStore["esc_esc-001"] as { payload: Record<string, unknown> };
+    expect(row.payload.transport).toBe("acp");
+    expect(row.payload.sessionId).toBe("sess-acp");
   });
 });
 
 describe("EscalationManager.handleCallback - callback data parsing", () => {
-  it("handles esc_suggested action with suggested reply", async () => {
-    const manager = new EscalationManager();
+  it("handles esc_suggested action with suggested reply, and clears the park", async () => {
     const ctx = mockCtx();
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "unsure",
-      suggestedReply: "Here is help",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx);
 
     await manager.handleCallback(ctx, "token", "suggested", "esc-001", "user-1", "cbq-1", "esc-chat-1", 42);
 
-    // Should resolve and edit message
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("resolved");
+    // Resolved: the row is gone rather than flipped to a "resolved" sentinel
+    // (parked-interactions.ts's liveness rule is "the park exists").
+    expect(stateStore["esc_esc-001"]).toBeUndefined();
   });
 
-  it("handles esc_reply action by editing message to awaiting reply", async () => {
-    const manager = new EscalationManager();
+  it("handles esc_reply action by editing message to awaiting reply, without resolving", async () => {
     const ctx = mockCtx();
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "unsure",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx);
 
     await manager.handleCallback(ctx, "token", "reply", "esc-001", "user-1", "cbq-1", "esc-chat-1", 42);
 
     expect(editedMessages.length).toBe(1);
     expect(editedMessages[0].text).toContain("Awaiting Your Reply");
+    // Still parked — "Reply" only prompts for a follow-up message, it does not resolve.
+    expect(stateStore["esc_esc-001"]).toBeDefined();
   });
 
   it("handles esc_dismiss action", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx);
 
     await manager.handleCallback(ctx, "token", "dismiss", "esc-001", "user-1", "cbq-1", "esc-chat-1", 42);
 
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("resolved");
+    expect(stateStore["esc_esc-001"]).toBeUndefined();
   });
 
-  it("ignores callback for non-pending escalation", async () => {
-    const manager = new EscalationManager();
+  it("ignores callback for an already-resolved escalation", async () => {
     const ctx = mockCtx();
+    const { manager } = await createEscalation(ctx);
+    await manager.handleCallback(ctx, "token", "dismiss", "esc-001", "user-1", "cbq-1", "esc-chat-1", 42);
+    editedMessages = [];
+    emittedEvents = [];
 
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      status: "resolved",
-    };
-
+    // A redelivered tap after the row is cleared is indistinguishable from
+    // one that never existed — both take the same early-return path.
     await manager.handleCallback(ctx, "token", "dismiss", "esc-001", "user-1", "cbq-1", "esc-chat-1", 42);
 
-    // Nothing should happen
     expect(editedMessages.length).toBe(0);
     expect(emittedEvents.length).toBe(0);
   });
@@ -338,81 +308,39 @@ describe("EscalationManager.handleCallback - callback data parsing", () => {
 
 describe("EscalationManager.checkTimeouts", () => {
   it("times out escalation that has exceeded timeout", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_pending_ids"] = ["esc-001"];
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date(Date.now() - 120000).toISOString(),
-      timeoutAt: new Date(Date.now() - 60000).toISOString(), // already timed out
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx, { timeout: { durationMs: -60000, defaultAction: "defer" } });
 
     await manager.checkTimeouts(ctx, "token");
 
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("timed_out");
     expect(editedMessages.length).toBe(1);
     expect(editedMessages[0].text).toContain("Timed Out");
+    // Cleared, not left behind under a "timed_out" sentinel.
+    expect(stateStore["esc_esc-001"]).toBeUndefined();
   });
 
   it("does not time out escalation that has not exceeded timeout", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_pending_ids"] = ["esc-001"];
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(), // future
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx, { timeout: { durationMs: 60000, defaultAction: "defer" } });
 
     await manager.checkTimeouts(ctx, "token");
 
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("pending");
     expect(editedMessages.length).toBe(0);
+    expect(stateStore["esc_esc-001"]).toBeDefined();
   });
 
   it("auto-replies on timeout when defaultAction is auto_reply", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_pending_ids"] = ["esc-001"];
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedReply: "Auto response text",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date(Date.now() - 120000).toISOString(),
-      timeoutAt: new Date(Date.now() - 60000).toISOString(),
-      defaultAction: "auto_reply",
+    const { manager } = await createEscalation(ctx, {
+      timeout: { durationMs: -60000, defaultAction: "auto_reply" },
+      context: {
+        conversationHistory: [],
+        agentReasoning: "test",
+        suggestedActions: [],
+        suggestedReply: "Auto response text",
+      },
       originChatId: "origin-chat",
-    };
+    });
 
     await manager.checkTimeouts(ctx, "token");
 
@@ -420,48 +348,19 @@ describe("EscalationManager.checkTimeouts", () => {
     expect(sentMessages.some(m => m.chatId === "origin-chat")).toBe(true);
   });
 
-  it("removes timed-out escalation from pending list", async () => {
-    const manager = new EscalationManager();
+  it("removes only the timed-out escalation from the live-key index, leaving the other pending", async () => {
     const ctx = mockCtx();
-
-    stateStore["escalation_pending_ids"] = ["esc-001", "esc-002"];
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date(Date.now() - 120000).toISOString(),
-      timeoutAt: new Date(Date.now() - 60000).toISOString(),
-      defaultAction: "defer",
-    };
-    stateStore["escalation_esc-002"] = {
-      escalationId: "esc-002",
-      status: "pending",
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      escalationChatId: "chat",
-      escalationMessageId: "99",
-      agentId: "a",
-      companyId: "c",
-      reason: "low_confidence",
-      agentReasoning: "x",
-      suggestedActions: [],
-      createdAt: new Date().toISOString(),
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx, { escalationId: "esc-001", timeout: { durationMs: -60000, defaultAction: "defer" } });
+    await createEscalation(ctx, { escalationId: "esc-002", timeout: { durationMs: 60000, defaultAction: "defer" } });
 
     await manager.checkTimeouts(ctx, "token");
 
-    const pendingIds = stateStore["escalation_pending_ids"] as string[];
-    expect(pendingIds).not.toContain("esc-001");
-    expect(pendingIds).toContain("esc-002");
+    const index = stateStore["index_esc"] as string[];
+    expect(index).not.toContain("esc-001");
+    expect(index).toContain("esc-002");
   });
 
-  it("does nothing when pending list is empty", async () => {
+  it("does nothing when nothing is parked", async () => {
     const manager = new EscalationManager();
     const ctx = mockCtx();
 
@@ -472,24 +371,8 @@ describe("EscalationManager.checkTimeouts", () => {
   });
 
   it("emits escalation.timed_out event", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_pending_ids"] = ["esc-001"];
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date(Date.now() - 120000).toISOString(),
-      timeoutAt: new Date(Date.now() - 60000).toISOString(),
-      defaultAction: "defer",
-    };
+    const { manager } = await createEscalation(ctx, { timeout: { durationMs: -60000, defaultAction: "defer" } });
 
     await manager.checkTimeouts(ctx, "token");
 
@@ -499,24 +382,8 @@ describe("EscalationManager.checkTimeouts", () => {
 
 describe("EscalationManager.respond", () => {
   it("resolves a pending escalation", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      defaultAction: "defer",
-    };
-    stateStore["escalation_pending_ids"] = ["esc-001"];
+    const { manager } = await createEscalation(ctx);
 
     await manager.respond(ctx, "token", "esc-001", {
       escalationId: "esc-001",
@@ -525,18 +392,12 @@ describe("EscalationManager.respond", () => {
       action: "reply_to_customer",
     });
 
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("resolved");
+    expect(stateStore["esc_esc-001"]).toBeUndefined();
   });
 
-  it("ignores respond for non-pending escalation", async () => {
+  it("ignores respond for a non-pending (never created, or already resolved) escalation", async () => {
     const manager = new EscalationManager();
     const ctx = mockCtx();
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      status: "resolved",
-    };
 
     await manager.respond(ctx, "token", "esc-001", {
       escalationId: "esc-001",
@@ -557,25 +418,9 @@ describe("EscalationManager.respond", () => {
 // the remaining companies' timeout checks for that tick.
 describe("EscalationManager - events.emit rejection is caught, not dropped or propagated", () => {
   it("logs and swallows a rejected escalation.resolved emit", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
+    const { manager } = await createEscalation(ctx);
     (ctx.events.emit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host RPC unavailable"));
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      defaultAction: "defer",
-    };
-    stateStore["escalation_pending_ids"] = ["esc-001"];
 
     await expect(
       manager.respond(ctx, "token", "esc-001", {
@@ -590,31 +435,14 @@ describe("EscalationManager - events.emit rejection is caught, not dropped or pr
       "Failed to emit escalation.resolved",
       expect.objectContaining({ escalationId: "esc-001", error: expect.stringContaining("host RPC unavailable") }),
     );
-    // The rejection must not have aborted resolve(): state was still updated.
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("resolved");
+    // The rejection must not have aborted resolve(): the park was still cleared.
+    expect(stateStore["esc_esc-001"]).toBeUndefined();
   });
 
   it("logs and swallows a rejected escalation.timed_out emit", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
+    const { manager } = await createEscalation(ctx, { timeout: { durationMs: -60000, defaultAction: "defer" } });
     (ctx.events.emit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host RPC unavailable"));
-
-    stateStore["escalation_pending_ids"] = ["esc-001"];
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date(Date.now() - 120000).toISOString(),
-      timeoutAt: new Date(Date.now() - 60000).toISOString(),
-      defaultAction: "defer",
-    };
 
     await expect(manager.checkTimeouts(ctx, "token")).resolves.toBeUndefined();
 
@@ -622,33 +450,14 @@ describe("EscalationManager - events.emit rejection is caught, not dropped or pr
       "Failed to emit escalation.timed_out",
       expect.objectContaining({ escalationId: "esc-001", error: expect.stringContaining("host RPC unavailable") }),
     );
-    // The rejection must not have aborted checkTimeouts(): state still moved on.
-    const stored = stateStore["escalation_esc-001"] as Record<string, unknown>;
-    expect(stored.status).toBe("timed_out");
+    // The rejection must not have aborted checkTimeouts(): the park was still cleared.
+    expect(stateStore["esc_esc-001"]).toBeUndefined();
   });
 
   it("logs and swallows a rejected acp-spawn emit when routing an escalation reply over ACP", async () => {
-    const manager = new EscalationManager();
     const ctx = mockCtx();
+    const { manager } = await createEscalation(ctx, { transport: "acp", sessionId: "sess-acp-1" });
     (ctx.events.emit as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("host RPC unavailable"));
-
-    stateStore["escalation_esc-001"] = {
-      escalationId: "esc-001",
-      agentId: "agent-1",
-      companyId: "company-1",
-      reason: "low_confidence",
-      agentReasoning: "test",
-      suggestedActions: [],
-      escalationChatId: "esc-chat-1",
-      escalationMessageId: "42",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      timeoutAt: new Date(Date.now() + 60000).toISOString(),
-      defaultAction: "defer",
-      transport: "acp",
-      sessionId: "sess-acp-1",
-    };
-    stateStore["escalation_pending_ids"] = ["esc-001"];
 
     await expect(
       manager.respond(ctx, "token", "esc-001", {

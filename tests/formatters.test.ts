@@ -196,15 +196,15 @@ describe("formatApprovalCreated", () => {
     const buttons = msg.options.inlineKeyboard![0];
     expect(buttons.length).toBe(2);
     expect(buttons[0].text).toBe("Approve");
-    expect(buttons[0].callback_data).toBe("approve_apr-1");
+    expect(buttons[0].callback_data).toBe("pk:apr:apr-1:approve");
     expect(buttons[1].text).toBe("Reject");
-    expect(buttons[1].callback_data).toBe("reject_apr-1");
+    expect(buttons[1].callback_data).toBe("pk:apr:apr-1:reject");
   });
 
   it("falls back to entityId for approvalId", () => {
     const msg = formatApprovalCreated(mockEvent({ approvalId: undefined }));
     const buttons = msg.options.inlineKeyboard![0];
-    expect(buttons[0].callback_data).toBe("approve_iss-123");
+    expect(buttons[0].callback_data).toBe("pk:apr:iss-123:approve");
   });
 
   it("is always loud, regardless of any linked issue priority", () => {
