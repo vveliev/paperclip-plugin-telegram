@@ -38,6 +38,19 @@ export type ParkedFlow = "ask" | "conf" | "wapp" | "esc" | "ho";
 export const PARKED_FLOWS: readonly ParkedFlow[] = ["ask", "conf", "wapp", "esc", "ho"];
 
 /**
+ * The flows the generic sweeper may delete blind.
+ *
+ * `esc` is deliberately absent. An expired escalation is not simply dead: its
+ * `defaultAction` (defer / auto_reply / close) still has to be applied and the
+ * chat told, which is `checkTimeouts`'s job and needs a Telegram call. The
+ * sweeper makes no Telegram call by design -- that is why it does not wait on
+ * `ensureRuntime()` -- so sweeping `esc` here would delete the park without
+ * ever taking its action, and would do it precisely when the runtime is down
+ * and `checkTimeouts` is no-opping. Every other parked flow expires to nothing.
+ */
+export const SWEEPABLE_FLOWS: readonly ParkedFlow[] = ["ask", "conf", "wapp", "ho"];
+
+/**
  * Two flows (the approval-notice buttons formatters.ts/decisions.ts send,
  * and the decisions-paging "Show more" button) call a platform API directly
  * by an id the platform already owns — they never park local state, so they
@@ -236,10 +249,14 @@ export async function sweepExpiredFlow(ctx: PluginContext, flow: ParkedFlow, now
   return expired.length;
 }
 
-/** Delete every expired park across all flows. The job registered as `sweep-parked-interactions` calls this. */
-export async function sweepAllExpired(ctx: PluginContext, now: number = Date.now()): Promise<Record<ParkedFlow, number>> {
-  const result = {} as Record<ParkedFlow, number>;
-  for (const flow of PARKED_FLOWS) {
+/**
+ * Delete every expired park across the flows that expire to nothing. The job
+ * registered as `sweep-parked-interactions` calls this. Escalation is excluded
+ * on purpose -- see SWEEPABLE_FLOWS.
+ */
+export async function sweepAllExpired(ctx: PluginContext, now: number = Date.now()): Promise<Partial<Record<ParkedFlow, number>>> {
+  const result: Partial<Record<ParkedFlow, number>> = {};
+  for (const flow of SWEEPABLE_FLOWS) {
     result[flow] = await sweepExpiredFlow(ctx, flow, now);
   }
   return result;

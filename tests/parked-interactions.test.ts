@@ -237,22 +237,43 @@ describe("sweeper", () => {
     expect((await unpark(ctx, "wapp", alive)).status).toBe("live");
   });
 
-  it("sweepAllExpired covers every parked flow independently", async () => {
+  it("sweepAllExpired covers every sweepable flow independently", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const ctx = mockCtx();
     await park(ctx, "wapp", { n: 1 }, { ttlMs: 1000 });
-    await park(ctx, "esc", { n: 1 }, { ttlMs: 1000 });
     await park(ctx, "ho", { n: 1 }, { ttlMs: 10_000 }); // stays alive
 
     vi.setSystemTime(2000);
     const result = await sweepAllExpired(ctx);
 
     expect(result.wapp).toBe(1);
-    expect(result.esc).toBe(1);
     expect(result.ho).toBe(0);
     expect(result.ask).toBe(0);
     expect(result.conf).toBe(0);
+  });
+
+  // An expired escalation is not simply dead: checkTimeouts still has to apply
+  // its defaultAction and tell the chat, which needs a Telegram call. The
+  // sweeper makes none by design -- it does not wait on ensureRuntime() -- so
+  // sweeping esc here would delete the park without ever taking its action,
+  // and would do it exactly when the runtime is down and checkTimeouts is
+  // no-opping. Deleting this expectation reintroduces that silent loss.
+  it("never sweeps an expired escalation — checkTimeouts owns that lifecycle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const ctx = mockCtx();
+    const key = await park(ctx, "esc", { n: 1 }, { ttlMs: 1000 });
+
+    vi.setSystemTime(2000);
+    const result = await sweepAllExpired(ctx);
+
+    expect(result.esc).toBeUndefined();
+    // The sweep deleted nothing -- checked before probing, because unpark()
+    // itself reclaims an expired row and would otherwise supply the delete.
+    expect((ctx.state.delete as ReturnType<typeof vi.fn>).mock.calls.length).toBe(0);
+    // and the row is still there for checkTimeouts to act on
+    expect(await unpark(ctx, "esc", key)).toMatchObject({ status: "expired" });
   });
 
   it("drops a stale index entry whose row is already gone, without reporting it as expired", async () => {
