@@ -44,6 +44,10 @@ export default defineConfig({
         // ACP path resolves through it, and a regression here is what used to
         // wedge the poller, so it is pinned rather than left to the global floor.
         "src/company-link.ts": { statements: 100, functions: 100 },
+        // Owns key allocation, the codec, liveness and expiry for every parked
+        // flow. An unswept or wrongly-swept park is a button that silently does
+        // nothing, so it is pinned rather than left to the global floor.
+        "src/parked-interactions.ts": { statements: 95, functions: 100 },
         "src/acp-bridge.ts": { statements: 75, functions: 90 },
         "src/adapter.ts": { statements: 100, functions: 100 },
         // setup() is only reachable through the two-step boot in

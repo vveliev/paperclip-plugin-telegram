@@ -1734,14 +1734,24 @@ async function handleCallbackQuery(
     }
 
     case "ho": {
-      if (decoded.action === "approve") {
-        await handleHandoffApproval(ctx, token, decoded.key, actor, query.id, chatId, messageId);
-        await answerCallbackQuery(ctx, token, query.id, "Handoff approved");
-        return;
-      }
-      if (decoded.action === "reject") {
-        await handleHandoffRejection(ctx, token, decoded.key, actor, query.id, chatId, messageId);
-        await answerCallbackQuery(ctx, token, query.id, "Handoff rejected");
+      // executeHandoff awaits the agent APIs and Telegram. A throw here would
+      // escape handleCallbackQuery and handleUpdate, and a throw escaping
+      // handleUpdate stops the polling offset advancing -- Telegram redelivers
+      // the same update forever and the poller wedges for every chat, not just
+      // this one. Answer the press and log instead.
+      if (decoded.action === "approve" || decoded.action === "reject") {
+        const approve = decoded.action === "approve";
+        try {
+          if (approve) {
+            await handleHandoffApproval(ctx, token, decoded.key, actor, query.id, chatId, messageId);
+          } else {
+            await handleHandoffRejection(ctx, token, decoded.key, actor, query.id, chatId, messageId);
+          }
+          await answerCallbackQuery(ctx, token, query.id, approve ? "Handoff approved" : "Handoff rejected");
+        } catch (err) {
+          ctx.logger.error("Handoff callback failed", { handoffId: decoded.key, action: decoded.action, error: String(err) });
+          await answerCallbackQuery(ctx, token, query.id, "Could not complete the handoff. Try again.");
+        }
         return;
       }
       await answerCallbackQuery(ctx, token, query.id, "Unknown action");
