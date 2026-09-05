@@ -108,6 +108,9 @@ if (mode === "--text") {
 } else if (mode === "--message") {
   scan(readFileSync(arg, "utf8"), "commit message", findings);
 } else if (mode === "--staged") {
+  for (const f of git(["diff", "--cached", "--name-only", "--diff-filter=AR"]).split("\n").filter(Boolean)) {
+    if (!skipped(f)) scan(f.toUpperCase(), `path: ${f}`, findings, ["instance-uuid"]);
+  }
   for (const f of git(["diff", "--cached", "--name-only", "--diff-filter=ACM"]).split("\n").filter(Boolean)) {
     if (skipped(f)) continue;
     scan(git(["show", `:${f}`]), f, findings);
@@ -117,6 +120,19 @@ if (mode === "--text") {
   // carrying a legacy reference publishes nothing new, and failing it would
   // make the gate block almost every edit -- which is how a gate gets
   // switched off. `git diff -U0` gives exactly the lines this range adds.
+  // Paths are published too, and are matched upper-cased: filenames are
+  // conventionally lowercase while the tracker-id pattern is uppercase-only
+  // (it has to be, or it would match ordinary prose).
+  //
+  // Paths are published too. A file named for a tracker id leaks it to anyone
+  // reading the tree, and neither the content scan nor the branch-name scan
+  // looks at the name -- which is how tests/gif-150-*.test.ts reached the
+  // default branch. Only added and renamed paths are checked: an edit to a
+  // file that was already badly named is not this change's leak.
+  for (const path of git(["diff", "--name-only", "--diff-filter=AR", arg]).split("\n").filter(Boolean)) {
+    if (!skipped(path)) scan(path.toUpperCase(), `path: ${path}`, findings, ["instance-uuid"]);
+  }
+
   let currentFile = null;
   let lineNo = 0;
   for (const raw of git(["diff", "-U0", "--diff-filter=ACM", arg]).split("\n")) {
