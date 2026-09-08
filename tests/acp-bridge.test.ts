@@ -588,10 +588,10 @@ describe("checkConversationLoopContinuation (via handleAcpOutput) - events.emit 
 
     await expect(handleAcpOutput(ctx, "token", {
       sessionId: "initiator-session",
+      type: "text",
       chatId: "chat-1",
       threadId: 42,
       text: "turn one output",
-      done: false,
     })).resolves.toBeUndefined();
 
     expectEmitFailureLogged(ctx, "discussion turn", { sessionId: "target-session" });
